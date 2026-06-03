@@ -19,6 +19,8 @@ import evals.github_railbridge.merge_chain
 import evals.github_railbridge.tasks
 import evals.github_railbridge.policy
 import evals.github_railbridge.enforce
+import evals.github_railbridge.live_rail
+import evals.github_railbridge.l3_run
 import signet.authorizers.github_railbridge
 leaked = sorted(m for m in sys.modules
                 if m == "agentdojo" or m.startswith("agentdojo."))
