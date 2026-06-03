@@ -1,0 +1,64 @@
+{
+  "request_id": "req_265148e9",
+  "intent": {
+    "mandate_id": "mandate_d4607695",
+    "principal_id": "acme_cfo",
+    "agent_id": "invoice_agent_01",
+    "scope": "pay_invoice",
+    "allowed_actions": [
+      "pay_invoice"
+    ],
+    "max_amount": 5000,
+    "currency": "EUR",
+    "allowed_recipients": [
+      "vendor_abc",
+      "vendor_xyz"
+    ],
+    "valid_from": "2026-05-30T11:00:00Z",
+    "valid_until": "2026-06-29T12:00:00Z",
+    "nonce": "nonce_582af9e2",
+    "policy_id": "treasury_policy_v1",
+    "prompt_playback": "Pay approved supplier invoices up to the mandate cap.",
+    "signature": "0540af4616bcc31a9d485d14656398502a7ba233bf34acfc8fdddfb582ff4e1ed215dc80343ac3cc05eb1307f95f57a8f219d00fd0aa8c14fc54e188649ffe01"
+  },
+  "cart": {
+    "cart_id": "cart_e73b4f06",
+    "intent_mandate_id": "mandate_d4607695",
+    "intent_hash": "df138a2ceb49a249ad8bd7b15f6d22dd6f48ed1b0e24520de25a1105bf1c9497",
+    "agent_id": "invoice_agent_01",
+    "merchant_id": "merchant_acme",
+    "action": "pay_invoice",
+    "recipient": "vendor_abc",
+    "amount": 4800,
+    "currency": "EUR",
+    "destination_account": "vendor_abc_main_account",
+    "invoice_id": "INV-8821",
+    "signature": "7284a96c9f25780ffc983392b6f9cce2853d1d8d238044dbb0b78bfb5252bcbe589fc14272bbb3d7f9860f74312249b8f18899bff538b6bd4bf22253e2a1b806"
+  },
+  "payment": {
+    "payment_id": "pay_5fdc6a7d",
+    "cart_id": "cart_e73b4f06",
+    "cart_hash": "0422e0398a88808bdb4b600c7d5df4fe7c706633960666ba146c30d900d5de92",
+    "intent_hash": "df138a2ceb49a249ad8bd7b15f6d22dd6f48ed1b0e24520de25a1105bf1c9497",
+    "amount": 4800,
+    "currency": "EUR",
+    "funding_instrument": {
+      "rail": "mock",
+      "token": "tok_xxx"
+    },
+    "agent_present": "HNP",
+    "signature": null
+  },
+  "context": {
+    "task_id": "task_9021b5",
+    "agent_id": "invoice_agent_01",
+    "merchant_id": "merchant_acme",
+    "scope": "pay_invoice",
+    "action": "pay_invoice",
+    "recipient": "vendor_abc",
+    "amount": 4800,
+    "currency": "EUR",
+    "destination_account": "vendor_abc_main_account",
+    "rail": "mock"
+  }
+}
