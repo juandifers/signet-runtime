@@ -30,6 +30,7 @@ from signet.policy import Policy
 
 from .domain import (CONFIGURED_REPO, EFFECT_MERGE, diff_hash, effect_class_for,
                      effect_key, target_id)
+from .policy import DEFAULT_MERGE_POLICY, MergePolicy
 
 AGENT_ID = "github_merge_agent_01"
 SCOPE = "github_merge"
@@ -37,10 +38,9 @@ CURRENCY = "github"          # merges are unpriced; currency is a held-constant 
 RAIL = "github"
 MERCHANT = "github_app_octo"
 PRINCIPAL = "acme_cfo"       # the identity make_env() registers in the keystore
-# Merges-per-principal-per-window cap. amount==1 per merge, so this reuses the kernel's
-# existing per-principal velocity (policy.max_amount_per_day) as a merges/day rate limit.
-# A small conservative default -- it is config, not logic.
-GITHUB_DAILY_MERGE_CAP = 10
+# Back-compat alias: the merges/day cap now comes from the Policy (see policy.py). The
+# default policy's cap is the single source of truth; this name is kept for callers/tests.
+GITHUB_DAILY_MERGE_CAP = DEFAULT_MERGE_POLICY.merges_per_day
 
 
 def make_github_env(now: Optional[datetime] = None) -> Env:
@@ -59,7 +59,7 @@ def build_merge_chain(
     touched_paths=("src/app/widget.py",),
     author: str = "alice",
     allowed_actions=None,
-    daily_merge_cap: int = GITHUB_DAILY_MERGE_CAP,
+    policy: MergePolicy = DEFAULT_MERGE_POLICY,   # fence (deny paths) + velocity cap
     policy_id: Optional[str] = None,
     nonce: Optional[str] = None,
     valid_from: Optional[datetime] = None,
@@ -83,7 +83,8 @@ def build_merge_chain(
     allowed_actions = list(allowed_actions) if allowed_actions is not None else [EFFECT_MERGE]
 
     # ---- the AUTHORIZED merge (the Cart commits to this) ----
-    ec_cart = effect_class_for(touched_paths)
+    # protected-ness comes from the POLICY's deny fence, not a hardcoded glob constant.
+    ec_cart = effect_class_for(touched_paths, policy.deny_paths)
     rec_cart = effect_key(ec_cart, target_id(repo, pr, base, head_sha))
     diff_cart = diff_hash(touched_paths)
 
@@ -93,7 +94,7 @@ def build_merge_chain(
     b2 = ctx_base or base
     h2 = ctx_head_sha or head_sha
     paths2 = ctx_paths if ctx_paths is not None else touched_paths
-    ec_ctx = effect_class_for(paths2)
+    ec_ctx = effect_class_for(paths2, policy.deny_paths)
     rec_ctx = effect_key(ec_ctx, target_id(r2, p2, b2, h2))
     diff_ctx = diff_hash(paths2)
 
@@ -102,7 +103,7 @@ def build_merge_chain(
     env.policy.add(Policy(
         policy_id=policy_id,
         max_amount_per_transaction=1,
-        max_amount_per_day=int(daily_merge_cap),   # per-principal merges/day rate limit
+        max_amount_per_day=int(policy.merges_per_day),   # per-principal merges/day, from Policy
         allowed_recipients=[rec_cart],
         allowed_currencies=[CURRENCY],
         allowed_actions=[EFFECT_MERGE],

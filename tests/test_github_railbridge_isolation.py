@@ -12,11 +12,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _PROBE = """\
 import sys
-# The exact modules the kernel attack tests + the authorizer depend on:
+# The exact modules the kernel attack tests + the authorizer + the policy layer depend on:
 import evals.effect_core
 import evals.github_railbridge.domain
 import evals.github_railbridge.merge_chain
 import evals.github_railbridge.tasks
+import evals.github_railbridge.policy
+import evals.github_railbridge.enforce
 import signet.authorizers.github_railbridge
 leaked = sorted(m for m in sys.modules
                 if m == "agentdojo" or m.startswith("agentdojo."))
