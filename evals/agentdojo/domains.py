@@ -14,8 +14,8 @@ import json
 from dataclasses import dataclass
 from typing import Optional
 
-from .effects import (Effect, EffectPredicate, SEL_BEST_RATED, SEL_CHEAPEST,
-                      SEL_COMPUTED, SEL_NONE, _SELECTORS)
+from evals.effect_core import (Effect, EffectPredicate, SEL_BEST_RATED, SEL_CHEAPEST,
+                               SEL_COMPUTED, SEL_NONE, _SELECTORS)
 from .intent_provider import _strip_fences, make_hardened_extractor
 from .taxonomy import DD, DI, DIQ, LITERAL, RESOLVABLE, UNRESOLVABLE
 
@@ -116,6 +116,22 @@ class EffectDomainSpec:
         raise NotImplementedError
 
     # -- resolver hooks --
+    def canonicalize_literal(self, effect_class, target_literal, env) -> Optional[str]:
+        """Resolve an instruction-NAMED literal to its full bound target_id, attaching
+        any binding-only RUNTIME detail (e.g. a head_sha) the kernel must context-bind.
+
+        Default: identity -- return the literal unchanged (so a literal that is already
+        the full bound target needs no env, and every non-overriding domain is
+        byte-identical to before this hook existed).
+
+        An override MUST be a KEYED lookup of EXACTLY the one named id -- never a
+        description/keyword search, never a selection among candidates, and never a read
+        of body/title/file CONTENTS to decide WHICH target. env may only supply the
+        binding detail for that exact id; it may not change which target is authorized.
+        Return None if the named id maps to zero or >1 owned in-scope target (or falls
+        outside the envelope) -> the resolver routes that to REVIEW (never guess)."""
+        return target_literal
+
     def amount_for(self, effect_class, target_id, env) -> Optional[int]:
         return 1
 
