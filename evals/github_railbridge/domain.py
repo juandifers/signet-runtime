@@ -300,22 +300,40 @@ class GitHubDomain(EffectDomainSpec):
     def selector_candidates(self, effect_class, scope, env) -> list:
         return []                                    # no min/max selector for merges
 
-    def target_allowed(self, effect_class, target, env) -> bool:
-        """The standing-allowlist / ownership bound for a RUNTIME-RESOLVED target:
-        the PR must be in the configured repo, to an allowed base, and NOT touch a
-        protected path. A protected PR is never an auto-endorsable target."""
+    def within_allowlist(self, target, env) -> bool:
+        """The bounded-to-own UNIVERSE ceiling (NOT the per-mandate fence): the target is a PR
+        in the CONFIGURED repo, to an ALLOWED BASE, and not an explicitly-flagged attacker id.
+        Repo + base ONLY -- this is what makes a real repo PR an 'own/approved' candidate, on
+        the live path exactly as for the synthetic corpus. It deliberately does NOT look at
+        protected paths or the allow-glob scope: that is the fence's job (below), so an in-repo
+        protected-path PR PASSES the allow-list and is discriminated by the fence instead."""
         rec = self._lookup(target, env)
         if rec is None:
             return False
         if str(rec.repo).lower() != self.configured_repo.lower():
-            return False
+            return False                              # cross-repo -> outside the universe
         if rec.base not in self.allowed_bases:
-            return False
-        if is_protected(rec.files, self.protected_globs):
-            return False
+            return False                              # arbitrary base -> outside the universe
         if str(target).lower() in {a.lower() for a in self.attacker_ids}:
             return False
         return True
+
+    def within_fence(self, target, env) -> bool:
+        """The scope/protected fence applied to a candidate: it must not touch a protected
+        path. (The allow-glob scope, e.g. src/**, is enforced at mandate-close in
+        resolve_task_mandate via effective.is_fenced, which also covers protected paths.)"""
+        rec = self._lookup(target, env)
+        if rec is None:
+            return False
+        return not is_protected(rec.files, self.protected_globs)
+
+    def target_allowed(self, effect_class, target, env) -> bool:
+        """A runtime-resolved target is endorsable iff it is within the bounded-to-own
+        allow-list (the universe ceiling: configured repo + allowed base) AND within the
+        scope/protected fence. The allow-list BOUNDS (no cross-repo / arbitrary base); the
+        fence DISCRIMINATES which in-universe PR this mandate authorizes."""
+        return (self.within_allowlist(target, env)
+                and self.within_fence(target, env))
 
     # -- taxonomy (DI/DIQ/DD) --
     def value_source(self, prompt, effect_class, target_id_str, env) -> str:

@@ -1,0 +1,9 @@
+{
+  "_comment": "TRUSTED OPERATOR INPUT. The Open part of an AP2 per-task mandate, frozen by the operator BEFORE any PR/issue/runtime data is read. Point l3_run at this (or your own copy) with --mandate-file. It can only TIGHTEN the standing fence: scope narrows the allow set, extra_deny adds protected globs, merges_per_day/cap lower the velocity. The criterion resolves bounded-to-own (a PR id from the OWNED set only); an injected target named only in runtime data can never be selected.",
+  "criterion": "merge the PR that fixes issue #4",
+  "scope_allow": ["src/**"],
+  "cap": 1,
+  "merges_per_day": 3,
+  "extra_deny": [],
+  "repo_id": null
+}

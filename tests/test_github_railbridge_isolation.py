@@ -19,6 +19,12 @@ import evals.github_railbridge.merge_chain
 import evals.github_railbridge.tasks
 import evals.github_railbridge.policy
 import evals.github_railbridge.enforce
+import evals.github_railbridge.transparency
+import evals.github_railbridge.mandate
+import evals.github_railbridge.resolver
+import evals.github_railbridge.cassette
+import evals.github_railbridge.record_cassette
+import evals.github_railbridge.role_b_corpus
 import evals.github_railbridge.live_rail
 import evals.github_railbridge.l3_run
 import signet.authorizers.github_railbridge

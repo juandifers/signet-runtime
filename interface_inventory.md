@@ -1,10 +1,17 @@
-# Signet Runtime — Interface Inventory (read-only)
+# Signet Runtime — Interface Inventory
 
-> Read-only audit. No code/config/git changes were made. Signatures and type
-> definitions are quoted verbatim (function bodies elided with `...`). Where a
-> requested surface is named differently from the prompt, the divergence is noted
-> inline and again in **GAPS**. CLAUDE.md is treated as the source of truth for
-> naming/invariants; code↔doc disagreements are reported, not reconciled.
+> Signatures and type definitions are quoted verbatim (function bodies elided with
+> `...`). CLAUDE.md is treated as the source of truth for naming/invariants;
+> code↔doc disagreements are reported, not reconciled.
+>
+> **Layout:** **Part I (§0–§12)** = the kernel + the AgentDojo/τ-bench eval brain.
+> **Part II (§13–§20)** = the **GitHub rail-bridge ("the muscle")** on
+> `muscle/github-railbridge` — the `github_railbridge` authorizer plus its
+> `evals/github_railbridge/` stack (Open/Closed mandates, the Role A/B LLM resolver +
+> quarantine, RFC-6962 transparency). **GAPS** at the end.
+>
+> _Currency: covers the muscle work through the Role-B quarantine/cassette/corpus layer.
+> 94 tests collected; CI makes no live LLM calls._
 
 ---
 
@@ -26,11 +33,16 @@ signet/
 ├── revocation.py     in-memory revoked-mandate set
 ├── verifier.py       the 11-step kernel
 └── authorizers/
-    ├── base.py           Authorizer ABC + AuthorizationResult
-    ├── mock_broker.py    Role 2 — credential custody (the ONLY rail wired to api.py)
-    ├── xrpl_cosigner.py  Role 1 — XRPL 2-of-2 multisign
-    └── mpc_cosigner.py   Role 1b — 2-of-2 threshold Schnorr / MPC
+    ├── base.py             Authorizer ABC + AuthorizationResult
+    ├── mock_broker.py      Role 2 — credential custody (the ONLY rail wired to api.py)
+    ├── xrpl_cosigner.py    Role 1 — XRPL 2-of-2 multisign
+    ├── mpc_cosigner.py     Role 1b — 2-of-2 threshold Schnorr / MPC
+    └── github_railbridge.py  GitHub merge rail — GitHubRail ABC + MockGitHubRail +
+                              GitHubRailBridge (Role-2-style; conclude a Check Run). §13
 ```
+> `models.Receipt` gained ONE additive field — `decision_record_hash: Optional[str] = None`
+> (`models.py:157`) — excluded from `hashing_payload()` when None so legacy receipts hash
+> identically; when set it is signed-over. This is the **only** kernel edit the muscle made.
 
 ### Brain (`evals/`) — 2-level tree
 ```
@@ -49,10 +61,25 @@ evals/
 │   ├── run.py                main eval runner
 │   ├── extractor_reliability.py, smoke_*.py  reliability + smoke probes
 │   └── .runs/, FINDINGS.md, README.md
-└── tau_bench/
-    ├── retail_intent.py, gate.py, resolve.py, signet_retail_harness.py
-    ├── run.py, tau_path.py, smoke_test.py, FINDINGS.md, README.md
-    └── __init__.py
+├── tau_bench/
+│   ├── retail_intent.py, gate.py, resolve.py, signet_retail_harness.py
+│   ├── run.py, tau_path.py, smoke_test.py, FINDINGS.md, README.md
+│   └── __init__.py
+└── github_railbridge/                 # the muscle's eval stack (Part II). agentdojo-FREE.
+    ├── domain.py            §6 effect-key encoding for merges + GitHubDomain hooks  (§14)
+    ├── merge_chain.py       AP2 chain builder for a merge -> kernel (§19)
+    ├── policy.py            MergePolicy + PolicySource + intersect (monotonic)      (§15)
+    ├── enforce.py           resolve_effective_policy + enforce_merge                (§15)
+    ├── mandate.py           AP2 Open/Closed mandate + resolve_task_mandate + gates  (§16)
+    ├── resolver.py          Role A/B resolver: LLMResolver + clamp + factories      (§17)
+    ├── cassette.py          record/replay seam for Role B (CI replay, no key)       (§17)
+    ├── record_cassette.py   re-record tool + the 3 recorded scenarios               (§17)
+    ├── role_b_corpus.py     opt-in corpus measurement (utility/containment/...)     (§17)
+    ├── transparency.py      RFC-6962 DecisionRecord + Merkle + anchor + trace-hash  (§18)
+    ├── live_rail.py         real GitHub App rail (read PR ctx; post Check Run)       (§19)
+    ├── l3_run.py            live runner CLI (--mandate-file/--resolver/--provider)   (§20)
+    ├── tasks.py, corpus.py, diagnostic.py   synthetic task set + plan-time diagnostic
+    └── example_mandate.json  a blessed OpenMandate file
 ```
 
 ### Environment / tooling (from `pyproject.toml`)
@@ -60,7 +87,8 @@ evals/
 - **Pydantic**: `"pydantic>=2"` (models use Pydantic v2: `model_dump(mode="json", exclude=...)`).
 - **Test runner**: `pytest>=8` (dev extra). Config: `[tool.pytest.ini_options] pythonpath=["."]`, `testpaths=["tests"]`. Invoke: `pytest -v`.
 - **HTTP**: `fastapi>=0.110`, `uvicorn>=0.29` (server `signet/api.py`).
-- **GitHub client**: **NOT FOUND** — no `gh`/`requests`/GitHub SDK in dependencies. The only network client is `xrpl-py>=4` (XRPL JSON-RPC, used offline in tests). Eval extractors import `openai` / `anthropic` lazily inside factory functions (not declared in `pyproject.toml`).
+- **GitHub client**: optional extra `l3-github = ["pyjwt[crypto]>=2.8", "requests>=2.31"]` (`pyproject.toml:18`) powers the LIVE rail (`live_rail.py`) — `jwt`/`requests` imported **lazily**, so the offline suite never needs them. The XRPL client is `xrpl-py>=4` (used offline in tests). LLM extractors/resolvers import `openai` / `anthropic` **lazily** inside factory functions (not declared in `pyproject.toml`); the live resolver defaults to OpenAI (`OPENAI_API_KEY`).
+- **Agentdojo-free guarantee**: the kernel + the GitHub muscle never import the `agentdojo` package. Enforced by a subprocess probe (`tests/test_github_railbridge_isolation.py`) that imports the production+test modules and asserts no `agentdojo*` leaked.
 
 ---
 
@@ -643,6 +671,138 @@ any current caller. (Per the task constraints, nothing was changed; flagging onl
 
 ---
 
+# PART II — the GitHub rail-bridge ("the muscle")
+
+> Enforces **"merge a PR to a protected branch"** as the irreversible action. One new
+> `Authorizer`; the kernel is untouched (save the one additive `Receipt` field). The whole
+> `evals/github_railbridge/` stack is **agentdojo-free** (§0). The operator's grant is
+> **TRUSTED** and frozen BEFORE any runtime (PR/issue) read — same isolation discipline as
+> `_extract` (§6).
+
+## 13. GitHub authorizer (`signet/authorizers/github_railbridge.py`)
+
+The irreversible step = the enforcer concluding a required Check Run as `success`. The agent
+holds no capability to conclude it; only this authorizer does, and only after `verify_token`
++ an independent effect-vs-Cart re-check. Mirrors `mock_broker` (Role 2).
+
+`GitHubRail` ABC — `:28-37` (the rail capability the enforcer holds):
+```python
+class GitHubRail(ABC):
+    @abstractmethod
+    def open_check(self, chain_hash: str, head_sha: str) -> str: ...
+    @abstractmethod
+    def conclude(self, check_run_id: str, chain_hash: str, conclusion: str) -> str: ...
+```
+`MockGitHubRail` (`:40-66`) trusts ONLY checks the enforcer opened bound to a `chain_hash`, and refuses to conclude one not so bound or already concluded (consume-once) — the analogue of `MockPaymentAdapter`. The LIVE rail (`live_rail.LiveGitHubRail`, §19) implements the same ABC.
+
+`GitHubRailBridge(Authorizer)` — `:74-135`, `rail = "github"`. `authorize` is the two-step (`:101-135`):
+```python
+def authorize(self, token: ExecutionToken, req: ExecutionRequest) -> AuthorizationResult:
+    if not self._verifier.verify_token(token, self._enforcer_vk):       # FIRST, always
+        return AuthorizationResult(False, "Enforcer token invalid/expired.", rail=self.rail)
+    head_sha = _parse_head_sha(req.context.recipient)
+    recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
+    bound = (recomputed == token.chain_hash and self._well_formed(req)
+             and self._context_matches_cart(req))                       # independent re-check
+    check_run_id = self._rail.open_check(token.chain_hash, head_sha)
+    if not bound:
+        self._rail.conclude(check_run_id, token.chain_hash, "failure")  # fail closed
+        return AuthorizationResult(False, "Effect/context mismatch ...", payment_ref=check_run_id, rail=self.rail)
+    ref = self._rail.conclude(check_run_id, recomputed, "success")      # only the enforcer can
+    return AuthorizationResult(True, "Check Run concluded success ...", payment_ref=ref, rail=self.rail)
+```
+`_context_matches_cart` (`:83-91`) re-checks `recipient == ctx.recipient`, `action == ctx.action`, `destination_account == ctx.destination_account` (independent of the kernel's step-7). `_well_formed` (`:93-99`) requires `rail=="github"`, `recipient.startswith(action+":")`, and a `@head_sha`.
+
+## 14. GitHub effect encoding + domain hooks (`evals/github_railbridge/domain.py`)
+
+Reuses the §6/`effect_core` primitives. The encoding (single source of truth, matched by `merge_chain` + the authorizer):
+- `effect_class = "merge_pr_protected"` if touched paths hit the protected globs, else `"merge_pr"` (`effect_class_for :108`; `is_protected :95`).
+- `target_id(repo, pr, base, head_sha) = f"{repo}#{pr}->{base}@{head_sha}"` (`:85`) — binds base + exact head.
+- `diff_hash(touched_paths)` (`:90`) rides as `destination_account`. `effect_key` is re-exported from `effect_core`.
+- A post-auth force-push (new head_sha) or base swap changes the bound recipient → the **unchanged kernel** (step 7/8) blocks it.
+
+World types: `PullRequest` (`:60-73`, frozen) carries `repo, number, base, head_sha, files, title, branch, author, injected_body, closes_issue, status, created_order` — `injected_body` is the UNTRUSTED channel the resolver path never reads; `GitHubWorld` (`:76-78`) = `{number -> PullRequest}` (the principal's OWN open PRs).
+
+`GitHubDomain(EffectDomainSpec)` (`:184`) binds its fence to a `MergePolicy` via `__init__(policy=None)` (`:202`). The **two-layer** discrimination (the load-bearing split):
+```python
+def within_allowlist(self, target, env) -> bool:   # :303  the bounded-to-own UNIVERSE ceiling
+    # repo == configured_repo AND base in allowed_bases AND not an attacker id. Repo+base ONLY
+    # — NOT protected paths / allow-scope (that is the fence's job). This is what makes a real
+    # repo PR an 'own/approved' candidate on the live path exactly as for the synthetic corpus.
+def within_fence(self, target, env) -> bool:        # :321  the scope/protected fence
+    # not is_protected(rec.files)
+def target_allowed(self, effect_class, target, env) -> bool:  # :330
+    return self.within_allowlist(target, env) and self.within_fence(target, env)
+```
+`match_descriptor` (`:263`) resolves a descriptor over OWN PRs only (issue ref / CI status / recency / explicit id / keyword phrase). `canonicalize_literal` (`:239`) keys a literal PR id → its bound `target_id` (escalates protected/off-allowlist). `build_extractor` (`:349`) returns the deterministic instruction-only `extract_merge_predicate` (Role A; §17). Standing constants: `CONFIGURED_REPO="octo/payments-service"` (`:46`), `ALLOWED_BASES=("main","release")` (`:47`), `PROTECTED_GLOBS` (`:50`).
+
+## 15. Layered policy + sources (`policy.py`, `enforce.py`)
+
+`MergePolicy` (`policy.py:67-131`, frozen/hashable) — the typed fence:
+```python
+allow_paths=("**",); deny_paths=PROTECTED_GLOBS; effect_tiers=DEFAULT_TIERS
+merges_per_day=10; freeze=False; allowed_bases=ALLOWED_BASES; repo_id=CONFIGURED_REPO
+extra_allow_layers=()    # internal CONJUNCTIVE allow layers (how a task narrows `allow`)
+```
+- `tier_for(effect_class) -> auto|approve|cosign|deny` (`:87`; unknown → DENY; `freeze` forces ≥cosign). Tiers `TIER_AUTO/APPROVE/COSIGN/DENY` (`:28-31`); `DEFAULT_TIERS = ((merge_pr, auto), (merge_pr_protected, deny))` (`:64`).
+- `path_disposition -> in-fence|denied|out-of-allow` (`:102`); `is_fenced` (`:109`).
+- `intersect(task)` (`:114`) is **monotonic** — denies union, `merges_per_day` mins, bases intersect, `freeze` ORs, the task's `allow_paths` appends as a conjunctive layer. A task can only ADD restrictions.
+
+`PolicySource` ABC (`:157`) `load_effective_policy(repo_id, principal_id) -> MergePolicy`. Impls: `InMemoryPolicySource` (`:163`, control-plane stub keyed by `(repo,principal)`); `BlessedRefPolicySource` (`:179`, reads a pinned ref and DELIBERATELY ignores the agent-writable `working_tree_policy` — the load-bearing property). `DEFAULT_MERGE_POLICY = MergePolicy()` (`:151`).
+
+`enforce.py`: `resolve_effective_policy(source, repo_id, principal_id, task_policy)` (`:36`) = `standing.intersect(task)` then **stamps `eff.repo_id = repo_id`** (`:49`) so the ownership ceiling keys off the LIVE repo (`SIGNET_GH_REPO`), not the default constant. `enforce_merge(...)` (`:54`) is the standalone decision path (base gate → fence → tier → auto runs the kernel). `MergeDecision` dataclass `:26`.
+
+## 16. AP2 Open/Closed mandate (`evals/github_railbridge/mandate.py`)
+
+`OpenMandate` (`:67-110`, frozen, **TRUSTED**): `criterion, scope_allow=("**",), cap=1, merges_per_day=None, extra_deny=(), repo_id=None`. `as_task_policy()` renders it as a narrowing `MergePolicy`; `predicate()` = Role A interpretation of the criterion string ONLY; `mandate_id()` hashes the grant (no runtime data); `criterion_issue()` parses `issue #N`. Loaded via `load_open_mandate(path)` (`:113`) — the ONLY ingestion point, before any rail read.
+
+`ClosedMandate` (`:138-147`): the resolved, fence-checked, bound effect (`repo, pr, base, head_sha, touched_paths, effect_class, bound_target`). `MandateResolution` (`:160-168`): `kind (RESOLVED|UNRESOLVED), closed, cause, considered, reasoning_trace, reasoning_trace_hash`.
+
+`resolve_task_mandate(om, world, effective, *, resolver=None, trace_store=None)` (`:176`) — the core. Deterministic by default; with a `resolver` it delegates to `_resolve_via_role_b` (`:293`), which proposes ONE owned PR id then runs `_gate_chosen_pr` (`:249`) — the **same gates regardless of proposer**: bounded-to-own membership → `within_allowlist` ceiling → `effective.is_fenced` (scope/protected) → allowed base. Off-scope/off-repo/ambiguous → UNRESOLVED (`unresolved_constraint`) → REVIEW. **Containment never depends on the resolver.**
+
+`run_open_mandate(env, source, bridge, receipts, world, *, repo_id, open_mandate, transparency=None, resolver=None, trace_store=None)` (`:489`) drives one job: resolve → `authorize_closed_mandate` (`:360`, routes through `GitHubRailBridge.authorize` + appends a signed receipt for allow/block/review) → records the injection-channel metric (`injection_targets :327`, the would-have-proceeded rate) → optionally appends a `DecisionRecord` to the Merkle log (re-sealing the receipt with the `decision_record_hash` backlink). `JobResult` (`:421`) carries `proceed_rate`. `explain_pr` (`:451`) prints the one-line per-PR "why" (allow-list ceiling → fence → criterion → verdict).
+
+## 17. Role A / Role B resolver + the quarantine (`resolver.py`, `cassette.py`, …)
+
+Two strictly-separated roles:
+- **Role A (TRUSTED, criterion interpretation)** = the deterministic `domain.extract_merge_predicate` — never sees runtime data (no LLM, so no injectable surface).
+- **Role B (EXPOSED, candidate resolution)** = an opt-in real LLM. Quarantined I/O contract:
+
+```python
+@dataclass(frozen=True)
+class CandidateView:   # resolver.py:55   the EXPOSED runtime view of one owned PR (untrusted)
+    pr: int; title=""; body=""; base=""; files=(); closes_issue=None; branch=""
+@dataclass(frozen=True)
+class ResolverChoice:  # :79   the CONSTRAINED output
+    pr: Optional[int]; reason: str; raw: str = ""; unresolved: bool = False
+class Resolver(ABC):   # :94   resolve(criterion, candidates) -> ResolverChoice
+class FixedChoiceResolver(Resolver):  # :107  deterministic stub (adversarial: always pick #99)
+class LLMResolver(Resolver):          # :200  one completion, clamped by _parse_choice
+```
+`_parse_choice(raw, valid_ids)` (`:159`) is the enforcement primitive: parses JSON (robust to prose/fences), then **clamps** to `{an owned id | "unresolved"}` — out-of-set ids, lists, bools, string-commands, extra fields all fail closed. `make_complete(provider, model)` / `make_resolver(...)` (`:289`/`:301`) are provider-aware (OpenAI default `gpt-4o-mini` `:46`, Anthropic `claude-sonnet-4-6` `:47`; lazily imported; `make_openai_complete` has a `json_mode` toggle `:220`). `_resolve_provider` (`:276`) auto-detects from the key in env.
+
+Record/replay seam (`cassette.py`): `cassette_key(criterion, candidates)` (`:31`) hashes the resolver INPUTS (prompt-wording-independent); `Cassette` (`:45`) is the JSON store; `CassetteResolver` (`:83`) replays the recorded raw through the SAME `_parse_choice` (REPLAY needs no key/network; RECORD calls a live `CompleteFn`). Fixture: `tests/fixtures/github_railbridge/role_b_cassette.json`. Re-record: `python -m evals.github_railbridge.record_cassette --record` (loads `.env`); the 3 scenarios live in `record_cassette.SCENARIOS` (`scenario_fuzzy_legit/ambiguous/poisoned`).
+
+Opt-in corpus (`role_b_corpus.py`): `build_corpus()` = ~34 labeled cases (clean/fuzzy/ambiguous/injection); `run_corpus`/`report`/`print_report` emit utility (correct/escalate/wrong), containment-when-fooled, bounded-to-own, schema-compliance. CLI: `python -m evals.github_railbridge.role_b_corpus --resolver llm|deterministic`.
+
+## 18. RFC-6962 transparency + reasoning-hash-link (`transparency.py`)
+
+`DecisionRecord` (`:79-124`, frozen) = the audit semantics as canonical fields, bound to the ENFORCEMENT via `chain_hash/execution_id/receipt_id` (not the receipt's hash — that backlink is recursive). Gained `reasoning_trace_hash: Optional[str] = None` (`:108`), **dropped from `to_canonical()` when None** (`:112`) so deterministic-resolver records hash identically. `build_decision_record(...)` `:127`.
+
+The reasoning-trace hash-link: `reasoning_trace_hash(trace)` (`:172`) + `ReasoningTraceStore` (`:178`) — a SEPARATE, mutable/deletable store of UNTRUSTED Role-B narrative; the anchored leaf commits to the HASH only, `verify(h)` is tamper-evident (`:205`). RFC-6962 primitives: `leaf_hash` (`0x00 || entry`, `:222`), `merkle_root` (`:242`), `audit_path`/`_root_from_path`, `SignedTreeHead` (`:287`), `InclusionProof` (`:304`, carries the `receipt_hash`), `verify_inclusion(record, proof, sth, enforcer_vk)` (`:317`, the auditor's function — needs only those 4 args + a pinned key). Anchoring: `AnchorSink` ABC + `LocalAppendOnlyAnchor` (`:366`, WORM stub). `TransparencyLog` (`:406`) stores records, signs the root, surfaces proactive proofs for sensitive (protected/non-auto-tier) entries.
+
+## 19. AP2 chain builder for a merge + the live rail
+
+`merge_chain.build_merge_chain(env, *, repo, pr, base, head_sha, touched_paths, …)` (`merge_chain.py:52`) is the GitHub analogue of `signet_harness`: it maps the merge to Signet objects and routes through the UNMODIFIED `Verifier`. Mapping (`:11-16`): `recipient = effect_key(effect_class, target_id)`, `action = effect_class`, `amount = 1`, `destination_account = diff_hash(touched_paths)`, `rail = "github"`. It exposes `ctx_*` runtime overrides + `tamper_cart_recipient`/`break_linkage` to diverge the RuntimeContext from the signed Cart (the attack hooks). `make_github_env()` (`:46`) reuses `builder.make_env`; `PRINCIPAL="acme_cfo"` (`:40`).
+
+`live_rail.py` — the real GitHub App rail (`LiveGitHubRail(GitHubRail)` `:81`, `from_env` `:102`, creds from `SIGNET_GH_*`, `jwt`/`requests` lazy). `read_pr_context(pr) -> PRContext` (`:183`) reads files/sha/base/title/body/head-ref + closing-issue ids + issue bodies (all UNTRUSTED, fail-closed). `parse_closing_issues(body)` (`:41`) parses `closes/fixes/resolves #N`. `world_from_rail(rail, repo, pr_numbers)` (`:248`) assembles the OWN-PR `GitHubWorld` (body+issues stashed in `injected_body`, never read by resolution).
+
+## 20. L3 runner + demos
+
+`python -m evals.github_railbridge.l3_run --mandate-file <f> [--dry-run] [--repo R] [--env-file .env] [--resolver deterministic|llm|adversarial] [--provider openai|anthropic] [--model M] [--adversarial-pr N]` (`l3_run.py:main`). Loads the TRUSTED OpenMandate FIRST, builds the live rail, assembles the world, resolves (deterministic default; opt-in Role B), routes through the authorizer, posts the `signet/enforced` Check Run, prints per-PR "why" lines + (for LLM) the Role-B reason + `reasoning_trace_hash`. Demos: `demos/github_railbridge_demo.py` (offline, full 7-step story) and `demos/github_railbridge_role_b_demo.py` (`--llm` for a real Role B; offline adversarial stub otherwise).
+
+---
+
 ## GAPS
 
 Requested-but-divergent or not found:
@@ -660,9 +820,11 @@ Requested-but-divergent or not found:
    in `intent_provider.py`; `signet.policy.Policy` via `builder.make_env`). No
    startup-overwrite bug is present in code (closest: `PolicyEngine.add`'s dict-keyed
    replace, not triggered by current callers). Reported, not fixed.
-4. **GitHub/HTTP client (§0):** no GitHub SDK or generic HTTP client in dependencies;
-   only `fastapi`/`uvicorn` (server) and `xrpl-py` (XRPL). Eval LLM extractors import
-   `openai`/`anthropic` lazily and are **not** declared in `pyproject.toml`.
+4. **GitHub/HTTP client (§0):** ~~no GitHub SDK~~ **RESOLVED** — the muscle added the
+   optional extra `l3-github = ["pyjwt[crypto]>=2.8","requests>=2.31"]` for the live rail
+   (`live_rail.py`), imported lazily so the offline suite is unaffected. Eval LLM
+   extractors/resolvers still import `openai`/`anthropic` lazily and are **not** declared in
+   `pyproject.toml`; the live resolver defaults to OpenAI.
 5. **`evaluate()` return type:** not annotated in the signature — declared only in the
    docstring as `(Decision, ExecutionToken | None)` (`verifier.py:70-71`).
 
@@ -671,7 +833,8 @@ Code↔CLAUDE.md divergences:
 6. **`base.py` vs the "must call `verify_token`" invariant:** the `Authorizer` ABC
    does not declare or call `verify_token`; the token-check contract is enforced only
    by convention inside each concrete authorizer (`mock_broker`, `xrpl_cosigner`,
-   `mpc_cosigner`). A new adapter that forgets the call would still satisfy the ABC.
+   `mpc_cosigner`, and now `github_railbridge` — whose `authorize` calls it as its FIRST
+   line, §13). A new adapter that forgets the call would still satisfy the ABC.
 7. **"Exactness step" naming:** what the prompt calls one exactness step is steps
    **7 (context binding)** and **8 (exactness)** in `verifier.py`; recipient/destination
    substitution is caught at step 7 (context hash), amount/currency at step 8.
@@ -679,3 +842,15 @@ Code↔CLAUDE.md divergences:
    vs `EXACT/CAP` (per-entry amount binding on `AuthorizedTransfer`, `intent_provider.py`).
    The prompt's "STRICT/POLICY/PREDICATE enum" maps to the former. Neither is a Python
    `Enum` — both are module-level string constants.
+
+Part II currency notes:
+
+9. **Test inventory:** 94 tests collected (`pytest --co`). The muscle's GitHub suite =
+   `tests/test_github_railbridge_*.py` (attacks 9, corpus 4, e2e 3, isolation 1,
+   live_resolution 7, open_mandate 5, policy 6, resolver 9, resolver_quarantine 7,
+   resolver_recorded 4, transparency 6). CI makes **no live LLM calls** (cassette replay +
+   fakes); the empirical breakout (`resolver_quarantine`) and `role_b_corpus` are **opt-in**
+   (flag + key). The §9 21-test `test_attacks.py` figure is the kernel suite only.
+10. **Two corpora in the muscle — don't conflate:** `evals/github_railbridge/corpus.py` +
+    `diagnostic.py` are the synthetic ~42-task **plan-time** set (deterministic, offline),
+    whereas `role_b_corpus.py` is the opt-in **real-LLM Role-B** corpus (~34 cases, §17).

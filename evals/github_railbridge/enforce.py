@@ -14,7 +14,7 @@ Offline only: no control plane, no GitHub App, no network.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from .domain import EFFECT_MERGE, EFFECT_MERGE_PROTECTED
@@ -35,9 +35,20 @@ class MergeDecision:
 
 def resolve_effective_policy(source: PolicySource, repo_id: str, principal_id: str,
                              task_policy: Optional[MergePolicy] = None) -> MergePolicy:
-    """standing (from the trusted source) ∩ task (narrowing only)."""
+    """standing (from the trusted source) ∩ task (narrowing only).
+
+    The effective fence is FOR `repo_id`: bind its `repo_id` to the repo being evaluated, so
+    "own/approved" (the configured-repo match in GitHubDomain.within_allowlist) keys off the
+    LIVE repo (SIGNET_GH_REPO) rather than a hardcoded default. The PolicySource is already
+    keyed by repo_id; this only corrects a stub that returns a repo-agnostic default policy,
+    which is exactly why a real repo's PRs used to be rejected as 'off-allowlist' while the
+    synthetic corpus (whose PRs live in the default repo) was accepted. No fence is widened:
+    repo_id is just the label the ownership ceiling compares against."""
     standing = source.load_effective_policy(repo_id, principal_id)
-    return standing.intersect(task_policy)
+    eff = standing.intersect(task_policy)
+    if repo_id and eff.repo_id != repo_id:
+        eff = replace(eff, repo_id=repo_id)
+    return eff
 
 
 def enforce_merge(env, source: PolicySource, *, repo_id: str, principal_id: str,
