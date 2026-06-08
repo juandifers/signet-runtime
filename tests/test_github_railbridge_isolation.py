@@ -21,6 +21,7 @@ import evals.github_railbridge.policy
 import evals.github_railbridge.enforce
 import evals.github_railbridge.transparency
 import evals.github_railbridge.mandate
+import evals.github_railbridge.ambiguity
 import evals.github_railbridge.resolver
 import evals.github_railbridge.cassette
 import evals.github_railbridge.record_cassette

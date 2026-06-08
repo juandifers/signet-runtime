@@ -71,7 +71,8 @@ evals/
     ├── policy.py            MergePolicy + PolicySource + intersect (monotonic)      (§15)
     ├── enforce.py           resolve_effective_policy + enforce_merge                (§15)
     ├── mandate.py           AP2 Open/Closed mandate + resolve_task_mandate + gates  (§16)
-    ├── resolver.py          Role A/B resolver: LLMResolver + clamp + factories      (§17)
+    ├── resolver.py          Role A/B resolver: SET-valued LLMResolver + _parse_set  (§17)
+    ├── ambiguity.py         Layer A structural pre-filter + cardinality abstention  (§17)
     ├── cassette.py          record/replay seam for Role B (CI replay, no key)       (§17)
     ├── record_cassette.py   re-record tool + the 3 recorded scenarios               (§17)
     ├── role_b_corpus.py     opt-in corpus measurement (utility/containment/...)     (§17)
@@ -762,28 +763,37 @@ extra_allow_layers=()    # internal CONJUNCTIVE allow layers (how a task narrows
 
 `run_open_mandate(env, source, bridge, receipts, world, *, repo_id, open_mandate, transparency=None, resolver=None, trace_store=None)` (`:489`) drives one job: resolve → `authorize_closed_mandate` (`:360`, routes through `GitHubRailBridge.authorize` + appends a signed receipt for allow/block/review) → records the injection-channel metric (`injection_targets :327`, the would-have-proceeded rate) → optionally appends a `DecisionRecord` to the Merkle log (re-sealing the receipt with the `decision_record_hash` backlink). `JobResult` (`:421`) carries `proceed_rate`. `explain_pr` (`:451`) prints the one-line per-PR "why" (allow-list ceiling → fence → criterion → verdict).
 
-## 17. Role A / Role B resolver + the quarantine (`resolver.py`, `cassette.py`, …)
+## 17. Role A / Role B resolver + the quarantine + structural abstention (`resolver.py`, `ambiguity.py`, `cassette.py`, …)
 
 Two strictly-separated roles:
 - **Role A (TRUSTED, criterion interpretation)** = the deterministic `domain.extract_merge_predicate` — never sees runtime data (no LLM, so no injectable surface).
-- **Role B (EXPOSED, candidate resolution)** = an opt-in real LLM. Quarantined I/O contract:
+- **Role B (EXPOSED, candidate resolution)** = an opt-in real LLM. **SET-VALUED**: it returns EVERY plausible owned id (not one pick), so genuine ambiguity is SURFACED, not guessed past. Quarantined I/O contract:
 
 ```python
 @dataclass(frozen=True)
-class CandidateView:   # resolver.py:55   the EXPOSED runtime view of one owned PR (untrusted)
+class CandidateView:   # resolver.py:64   the EXPOSED runtime view of one owned PR (untrusted)
     pr: int; title=""; body=""; base=""; files=(); closes_issue=None; branch=""
 @dataclass(frozen=True)
-class ResolverChoice:  # :79   the CONSTRAINED output
-    pr: Optional[int]; reason: str; raw: str = ""; unresolved: bool = False
-class Resolver(ABC):   # :94   resolve(criterion, candidates) -> ResolverChoice
-class FixedChoiceResolver(Resolver):  # :107  deterministic stub (adversarial: always pick #99)
-class LLMResolver(Resolver):          # :200  one completion, clamped by _parse_choice
+class ResolverSet:     # :89   the CONSTRAINED set-valued output
+    picks: tuple = ()          # tuple of (pr_id, reason); every pr_id is an owned id
+    raw: str = ""; unresolved: bool = False
+    @property ids -> frozenset # the clamped owned-id set
+class Resolver(ABC):   # :116  resolve(criterion, candidates) -> ResolverSet
+class FixedSetResolver(Resolver):     # :199  stub: always return a fixed SET (cardinality demos)
+class FixedChoiceResolver(Resolver):  # :215  stub: a single id as a one-element set (adversarial)
+class LLMResolver(Resolver):          # :273  one completion, clamped by _parse_set
 ```
-`_parse_choice(raw, valid_ids)` (`:159`) is the enforcement primitive: parses JSON (robust to prose/fences), then **clamps** to `{an owned id | "unresolved"}` — out-of-set ids, lists, bools, string-commands, extra fields all fail closed. `make_complete(provider, model)` / `make_resolver(...)` (`:289`/`:301`) are provider-aware (OpenAI default `gpt-4o-mini` `:46`, Anthropic `claude-sonnet-4-6` `:47`; lazily imported; `make_openai_complete` has a `json_mode` toggle `:220`). `_resolve_provider` (`:276`) auto-detects from the key in env.
+`_parse_set(raw, valid_ids)` (`:143`) is the enforcement primitive: parses JSON (robust to prose/fences; tolerates the legacy `{"choice": id}` shape), then **clamps** every element to the owned set — out-of-set ids are **dropped** (never inflate/redirect the set), bools/string-commands/non-lists/extra fields all fail closed; an empty surviving set ⇒ `unresolved`. `_coerce_id` (`:129`) rejects bools + non-`#?N`. `make_complete(provider, model)` / `make_resolver(...)` (`:362`/`:374`) are provider-aware (OpenAI default `gpt-4o-mini` `:55`, Anthropic `claude-sonnet-4-6` `:56`; lazily imported; `make_openai_complete` has a `json_mode` toggle `:293`). `_resolve_provider` (`:349`) auto-detects from the key in env.
 
-Record/replay seam (`cassette.py`): `cassette_key(criterion, candidates)` (`:31`) hashes the resolver INPUTS (prompt-wording-independent); `Cassette` (`:45`) is the JSON store; `CassetteResolver` (`:83`) replays the recorded raw through the SAME `_parse_choice` (REPLAY needs no key/network; RECORD calls a live `CompleteFn`). Fixture: `tests/fixtures/github_railbridge/role_b_cassette.json`. Re-record: `python -m evals.github_railbridge.record_cassette --record` (loads `.env`); the 3 scenarios live in `record_cassette.SCENARIOS` (`scenario_fuzzy_legit/ambiguous/poisoned`).
+**Structural abstention (`ambiguity.py`)** — two deterministic (no-LLM) layers wrap Role B:
+- `structural_prefilter(om, world)` (`:36`) = **Layer A**, runs BEFORE any LLM call: if the criterion is a closing-issue reference and ≥2 owned PRs literally close it, escalate (`unresolved_constraint`) — reads only `closes_issue` (low-capacity own field), never bodies.
+- `apply_cardinality(resolver_set, owned_ids)` (`:55`) = the **cardinality override** on Role B's clamped set `s`: `|s|==1` → resolve that PR (then the existing gate runs); `|s|>=2` → escalate (ambiguous); `|s|==0` → escalate. Both wired into `mandate._resolve_via_role_b` ahead of the unchanged `_gate_chosen_pr` containment gate.
 
-Opt-in corpus (`role_b_corpus.py`): `build_corpus()` = ~34 labeled cases (clean/fuzzy/ambiguous/injection); `run_corpus`/`report`/`print_report` emit utility (correct/escalate/wrong), containment-when-fooled, bounded-to-own, schema-compliance. CLI: `python -m evals.github_railbridge.role_b_corpus --resolver llm|deterministic`.
+> **Rail-side invariant (added):** a Role B resolution is endorsed ONLY IF exactly one owned candidate survives the abstention rule. Escalate-on-ambiguity is enforced **structurally on candidate-set cardinality**, never on the model's self-reported confidence or a single pick. This is a CORRECTNESS layer; it does not weaken or replace the containment gate (bounded-to-own → allow-list → scope/protected fence), which still runs independently on the single survivor.
+
+Record/replay seam (`cassette.py`): `cassette_key(criterion, candidates)` (`:31`) hashes the resolver INPUTS (prompt-wording-independent); `Cassette` (`:45`) is the JSON store; `CassetteResolver` (`:83`) replays the recorded raw through the SAME `_parse_set` (REPLAY needs no key/network; RECORD calls a live `CompleteFn`). Fixture: `tests/fixtures/github_railbridge/role_b_cassette.json` (re-recorded under the set schema). Re-record: `python -m evals.github_railbridge.record_cassette --record` (loads `.env`); the 3 scenarios live in `record_cassette.SCENARIOS` (`scenario_fuzzy_legit/ambiguous/poisoned`; only the legit PR structurally closes the issue so Layer A passes through to Role B for the poisoned case).
+
+Opt-in corpus (`role_b_corpus.py`): `build_corpus()` = ~34 labeled cases (clean/fuzzy/ambiguous/injection); `run_corpus`/`report`/`print_report` emit **resolution utility** (correct/escalate/wrong) AND **outcome correctness** (injection→escalate and ambiguous→escalate count as CORRECT), plus containment-when-fooled, bounded-to-own, schema-compliance. Measured live (gpt-4o-mini and gpt-4o, n=34): ambiguous 8/8 escalate (was 2/8), fuzzy 8/8, clean 8/8, injection 10/10 contained (attacker never endorsed), bounded-to-own + schema 100%, zero wrong. CLI: `python -m evals.github_railbridge.role_b_corpus --resolver llm|deterministic`.
 
 ## 18. RFC-6962 transparency + reasoning-hash-link (`transparency.py`)
 
@@ -845,12 +855,14 @@ Code↔CLAUDE.md divergences:
 
 Part II currency notes:
 
-9. **Test inventory:** 94 tests collected (`pytest --co`). The muscle's GitHub suite =
+9. **Test inventory:** 100 tests collected (`pytest --co`); a full run is **99 passed,
+   1 skipped** (the skip = the opt-in empirical breakout). The muscle's GitHub suite =
    `tests/test_github_railbridge_*.py` (attacks 9, corpus 4, e2e 3, isolation 1,
-   live_resolution 7, open_mandate 5, policy 6, resolver 9, resolver_quarantine 7,
-   resolver_recorded 4, transparency 6). CI makes **no live LLM calls** (cassette replay +
-   fakes); the empirical breakout (`resolver_quarantine`) and `role_b_corpus` are **opt-in**
-   (flag + key). The §9 21-test `test_attacks.py` figure is the kernel suite only.
+   live_resolution 7, open_mandate 5, policy 6, resolver 13, resolver_quarantine 21,
+   resolver_recorded 4, transparency 6 — counts include parametrized cases). CI makes **no
+   live LLM calls** (cassette replay + fakes); the empirical breakout (`resolver_quarantine`)
+   and `role_b_corpus` are **opt-in** (flag + key). The §9 21-test `test_attacks.py` figure is
+   the kernel suite only.
 10. **Two corpora in the muscle — don't conflate:** `evals/github_railbridge/corpus.py` +
     `diagnostic.py` are the synthetic ~42-task **plan-time** set (deterministic, offline),
     whereas `role_b_corpus.py` is the opt-in **real-LLM Role-B** corpus (~34 cases, §17).

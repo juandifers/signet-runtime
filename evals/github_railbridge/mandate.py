@@ -190,10 +190,11 @@ def resolve_task_mandate(om: OpenMandate, world: GitHubWorld,
 
     `resolver` (opt-in, default None) swaps WHO proposes the candidate. None = the
     deterministic bounded-to-own resolver below. A `Resolver` (e.g. a real-LLM Role B) instead
-    PROPOSES one owned PR id — but the SAME two gates then run on its proposal, so containment
-    does NOT depend on the resolver resisting an injection (see `_resolve_via_role_b`). When a
-    `trace_store` is supplied, Role B's untrusted narrative is stashed there and its hash
-    rides on the resolution for the DecisionRecord.
+    returns the SET of every plausible owned id; a structural pre-filter + cardinality rule
+    (Layer A / `ambiguity.py`) decide abstention on set cardinality, and the SAME two gates then
+    run on the single surviving id — so containment does NOT depend on the resolver resisting an
+    injection (see `_resolve_via_role_b`). When a `trace_store` is supplied, Role B's untrusted
+    narrative is stashed there and its hash rides on the resolution for the DecisionRecord.
     """
     domain = GitHubDomain(policy=effective)     # binds protected/bases/repo to the eff fence
     if resolver is not None:
@@ -292,29 +293,57 @@ def _gate_chosen_pr(world: GitHubWorld, effective: MergePolicy, domain: GitHubDo
 
 def _resolve_via_role_b(om: OpenMandate, world: GitHubWorld, effective: MergePolicy,
                         domain: GitHubDomain, resolver, trace_store) -> MandateResolution:
-    """Role B path: a QUARANTINED resolver PROPOSES one owned PR id from the runtime data, then
-    `_gate_chosen_pr` runs the unchanged gates on it. Role B is assumed possibly-fooled; the
-    envelope contains it. Its untrusted narrative is stored apart and only its HASH is carried
-    forward (committed into the DecisionRecord, never the anchor)."""
+    """Role B path with STRUCTURAL abstention. Three deterministic stages, none trusting the
+    model's conclusion:
+
+      1. Layer A (`structural_prefilter`): if the criterion is a closing-issue reference and
+         two+ owned PRs literally close it, escalate BEFORE any LLM call (structurally
+         ambiguous).
+      2. Set-valued Role B + the CARDINALITY rule (`apply_cardinality`): the QUARANTINED
+         resolver returns EVERY plausible owned id (clamped to the owned set); the job resolves
+         iff exactly ONE survives, and escalates the moment two+ (or zero) survive. This is the
+         abstention that the scope/protected gate cannot provide (two in-scope owned picks).
+      3. `_gate_chosen_pr`: the UNCHANGED containment gate (bounded-to-own -> allow-list ->
+         scope/protected fence) runs on the single surviving id.
+
+    Role B is assumed possibly-fooled; the cardinality rule + the envelope contain it. Its
+    untrusted narrative is stored apart and only its HASH is carried forward (committed into the
+    DecisionRecord, never the anchor)."""
     from .resolver import CandidateView                  # local import keeps the graph lean
+    from .ambiguity import apply_cardinality, structural_prefilter
 
     considered: List[Considered] = []
+
+    # Stage 1 — Layer A: structural pre-filter, BEFORE any LLM call (no trace exists yet).
+    pre = structural_prefilter(om, world)
+    if pre is not None:
+        return MandateResolution(UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {pre[1]}",
+                                 considered)
+
+    # Stage 2 — set-valued Role B + the cardinality override.
     candidates = [CandidateView.from_pr(rec) for rec in world.open_prs.values()]
-    choice = resolver.resolve(om.criterion, candidates)
+    rset = resolver.resolve(om.criterion, candidates)
 
     trace_hash = None
-    if trace_store is not None and choice.raw:
-        trace_hash = trace_store.put(choice.raw)        # stash the untrusted trace, keep the hash
+    if trace_store is not None and rset.raw:
+        trace_hash = trace_store.put(rset.raw)          # stash the untrusted trace, keep the hash
 
-    if choice.unresolved or choice.pr is None:
+    verdict, payload = apply_cardinality(rset, set(world.open_prs))
+    if verdict == "escalate":
+        # Record each ambiguous candidate for the audit trail (the cardinality rule fired).
+        for pr in sorted(rset.ids):
+            rec = world.open_prs.get(pr)
+            if rec is not None:
+                considered.append(Considered(pr, domain._target(rec), str(payload), "resolver"))
         return MandateResolution(
-            UNRESOLVED, None,
-            f"{UNRESOLVED_CONSTRAINT}: resolver did not pick an own PR ({choice.reason})",
-            considered, reasoning_trace=choice.raw, reasoning_trace_hash=trace_hash)
+            UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {payload}",
+            considered, reasoning_trace=rset.raw, reasoning_trace_hash=trace_hash)
 
-    return _gate_chosen_pr(world, effective, domain, choice.pr, considered,
-                           extra_cause=f"resolver pick #{choice.pr} not an own PR",
-                           channel="resolver", reasoning_trace=choice.raw,
+    # Stage 3 — exactly one owned id survived: the unchanged containment gate runs on it.
+    chosen = payload
+    return _gate_chosen_pr(world, effective, domain, chosen, considered,
+                           extra_cause=f"resolver pick #{chosen} not an own PR",
+                           channel="resolver", reasoning_trace=rset.raw,
                            reasoning_trace_hash=trace_hash)
 
 

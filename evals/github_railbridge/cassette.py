@@ -10,7 +10,7 @@ attacker) without ever calling the API.
 The cassette is keyed by a stable hash of the RESOLVER INPUTS (criterion + the candidate set's
 low-capacity fields), NOT the full prompt text — so re-wording the system prompt does not
 invalidate recordings, but changing the scenario does. The replayed raw text is run through the
-SAME `_parse_choice` clamp the live `LLMResolver` uses, so replay tests the real output path.
+SAME `_parse_set` clamp the live `LLMResolver` uses, so replay tests the real output path.
 
 agentdojo-free: imports only stdlib + signet.canonical + the (agentdojo-free) resolver.
 """
@@ -22,8 +22,8 @@ from typing import List, Optional
 
 from signet.canonical import hash_obj
 
-from .resolver import (CandidateView, CompleteFn, LLMResolver, Resolver, ResolverChoice,
-                       _SYSTEM, _build_user_prompt, _parse_choice)
+from .resolver import (CandidateView, CompleteFn, LLMResolver, Resolver, ResolverSet,
+                       _SYSTEM, _build_user_prompt, _parse_set)
 
 CASSETTE_SCHEMA = "signet.github.role_b_cassette.v1"
 
@@ -82,7 +82,7 @@ class Cassette:
 
 class CassetteResolver(Resolver):
     """Role B backed by a cassette. In REPLAY mode (default) it returns the recorded raw text
-    for a scenario and runs it through `_parse_choice` — exactly the live output path, minus the
+    for a scenario and runs it through `_parse_set` — exactly the live output path, minus the
     network. In RECORD mode (`record_from` set to a live CompleteFn) it calls the model on a
     miss, stores the raw, and continues; pass `save=True` to persist."""
 
@@ -93,7 +93,7 @@ class CassetteResolver(Resolver):
         self._label = label
         self._save = save
 
-    def resolve(self, criterion: str, candidates: List[CandidateView]) -> ResolverChoice:
+    def resolve(self, criterion: str, candidates: List[CandidateView]) -> ResolverSet:
         valid = {c.pr for c in candidates}
         raw = self._cas.get(criterion, candidates)
         if raw is None:
@@ -105,4 +105,4 @@ class CassetteResolver(Resolver):
             self._cas.put(criterion, candidates, raw, label=self._label)
             if self._save:
                 self._cas.save()
-        return _parse_choice(raw, valid)
+        return _parse_set(raw, valid)
