@@ -3,10 +3,16 @@
 
 PY ?= python3
 
-.PHONY: test scorecard scorecard-live scorecard-baseline
+.PHONY: test scorecard scorecard-live scorecard-baseline demo demo-serve
 
 test:                       ## run the deterministic CI suite (the spec)
 	$(PY) -m pytest -q
+
+demo:                       ## rebuild the static demo into docs/ from the unmodified kernel
+	$(PY) -m demos.build_demo
+
+demo-serve:                 ## rebuild and serve the demo locally at http://localhost:8000
+	$(PY) -m demos.build_demo && cd docs && $(PY) -m http.server
 
 scorecard:                  ## offline scorecard: pytest + replay containment + architecture (no LLM)
 	$(PY) -m evals.scorecard
