@@ -1,0 +1,26 @@
+{
+  "recorded": true,
+  "label": "Live run \u00b7 GitHub App \u00b7 test-repo-signet",
+  "repo": "juandifers/test-repo-signet",
+  "ran_at": "2026-06-09T16:35:57Z",
+  "success": {
+    "pr": 9,
+    "path": "src/payments.py",
+    "case": "in-scope src/** merge",
+    "head_sha": "16df8342ef414a167bc866d676bf089e7b03a3bc",
+    "check_run_id": "80375471818",
+    "conclusion": "success",
+    "url": "https://github.com/juandifers/test-repo-signet/runs/80375471818"
+  },
+  "rejected": {
+    "pr": 20,
+    "path": ".github/workflows/release.yml",
+    "case": "protected .github/workflows/** path",
+    "head_sha": "6aba1a2190c8e09b10f5d114eca0d88a3db187f5",
+    "check_run_id": "80375475243",
+    "conclusion": "failure",
+    "url": "https://github.com/juandifers/test-repo-signet/runs/80375475243"
+  },
+  "bridge_note": "Same GitHubRailBridge as the gauntlet \u2014 the only thing swapped was the injected rail object (MockGitHubRail -> LiveGitHubRail).",
+  "provenance": "Live run on a real repo via the installed GitHub App. Reproduce with evals/github_railbridge.l3_run."
+}

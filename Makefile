@@ -3,10 +3,13 @@
 
 PY ?= python3
 
-.PHONY: test scorecard scorecard-live scorecard-baseline demo demo-serve
+.PHONY: test proof scorecard scorecard-live scorecard-baseline demo demo-serve
 
 test:                       ## run the deterministic CI suite (the spec)
 	$(PY) -m pytest -q
+
+proof:                      ## structural proof that writing a rail is two functions
+	$(PY) -m demos.two_functions_proof
 
 demo:                       ## rebuild the static demo into docs/ from the unmodified kernel
 	$(PY) -m demos.build_demo

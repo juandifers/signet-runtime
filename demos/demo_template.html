@@ -282,6 +282,15 @@
   .ad-prov{padding:11px 20px; border-top:1px solid var(--line); background:rgba(230,197,106,.04);
     font-size:11.5px; color:var(--haze)}
   .ad-prov b{color:var(--seal)}
+  /* live-on-github panel reuses the .ad family; its table has one extra column */
+  .ad-table.lg-table .adr{grid-template-columns:.85fr .65fr 1.5fr 1.3fr .85fr 1fr}
+  .ad-table.lg-table .adc.block{color:var(--block)}
+  .ad-table.lg-table a{color:var(--seal); text-decoration:none}
+  .ad-table.lg-table a:hover{text-decoration:underline}
+  @media (max-width:680px){
+    .ad-table.lg-table .adr{grid-template-columns:1fr 1fr}
+    .ad-table.lg-table .adc:nth-child(n+3){border-top:1px solid var(--line)}
+  }
 
   /* ---------- resolution view ---------- */
   .funnel{position:relative; margin-top:16px; padding-left:30px}
@@ -513,6 +522,9 @@
       why an attack lands on the same check whether it's a merge, a deploy, or an infra apply.</p>
     </div>
   </section>
+
+  <!-- LIVE ON GITHUB (recorded REAL Check Runs from a live App run, rendered from data) -->
+  <div id="lg-panel"></div>
   </div><!-- /view-enforcement -->
 
   <div class="view" id="view-resolution" role="tabpanel" aria-labelledby="tab-resolution" hidden>
@@ -999,6 +1011,41 @@
       +'</div>';
   }
 
+  // Recorded REAL Check Runs from a live GitHub App run (data from demos/live_github_result.json).
+  // Mirrors renderAgentDojo: render-from-data, omit the panel entirely if the file was absent.
+  function renderLiveGitHub(){
+    const lg = TRACE.live_github;
+    const host = document.getElementById('lg-panel');
+    if(!host) return;
+    if(!lg){ host.innerHTML=''; return; }
+    const row = (r, kind) =>
+      '<div class="adr">'
+      +'<div class="adc"><span class="name">'+kind+'</span></div>'
+      +'<div class="adc"><a href="'+r.url+'" target="_blank" rel="noopener">PR #'+r.pr+'</a></div>'
+      +'<div class="adc">'+r.path+'</div>'
+      +'<div class="adc">'+r.case+'</div>'
+      +'<div class="adc '+(r.conclusion==='success'?'zero':'block')+'">'+r.conclusion+'</div>'
+      +'<div class="adc"><a href="'+r.url+'" target="_blank" rel="noopener">check '+r.check_run_id+' ↗</a></div>'
+      +'</div>';
+    host.innerHTML =
+      '<div class="ad">'
+      +'<div class="ad-h"><div class="ad-eyebrow">Live · <b>real GitHub Check Runs</b></div>'
+      +'<h2>The same bridge, run live on GitHub</h2>'
+      +'<div class="ad-cap">'+lg.label+'  ·  '+lg.ran_at+'</div></div>'
+      +'<div class="ad-body" style="grid-template-columns:minmax(0,1fr)">'
+        +'<div class="ad-bridge">'+lg.bridge_note+'</div>'
+      +'</div>'
+      +'<div class="ad-table lg-table">'
+        +'<div class="adr head"><div class="adc">Case</div><div class="adc">PR</div>'
+        +'<div class="adc">Changed path</div><div class="adc">Why</div>'
+        +'<div class="adc">Conclusion</div><div class="adc">Check Run</div></div>'
+        +row(lg.success,'authorized')
+        +row(lg.rejected,'blocked')
+      +'</div>'
+      +'<div class="ad-prov"><b>Provenance.</b> '+lg.provenance+'</div>'
+      +'</div>';
+  }
+
   // ================= TABS =================
   let enforcementPlayed=false, resolutionPlayed=false;
   const LEDE = {
@@ -1033,6 +1080,7 @@
     // resolution is the side tab -> build now, play lazily on first open.
     buildResChips(); buildBench(); resEls.run.addEventListener('click', playRes);
     renderAgentDojo();
+    renderLiveGitHub();
     document.getElementById('lede').textContent = LEDE.enforcement;
     document.getElementById('tab-enforcement').addEventListener('click', ()=>showTab('enforcement'));
     document.getElementById('tab-resolution').addEventListener('click', ()=>showTab('resolution'));

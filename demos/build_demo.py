@@ -43,6 +43,12 @@ def main() -> int:
     ad_path = ROOT / "demos" / "agentdojo_result.json"
     if ad_path.exists():
         trace["agentdojo"] = json.loads(ad_path.read_text())
+    # A RECORDED live-GitHub result (real Check Runs from a run of evals.github_railbridge.l3_run
+    # against the installed GitHub App). Like agentdojo, it is NOT regenerated here — it needs live
+    # credentials. Optional: if the file is absent the page simply omits the panel.
+    lg_path = ROOT / "demos" / "live_github_result.json"
+    if lg_path.exists():
+        trace["live_github"] = json.loads(lg_path.read_text())
     # Stamp the build so the page can show its own provenance.
     trace["built_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     trace["built_from"] = _git_sha()
