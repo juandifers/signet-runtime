@@ -1,0 +1,68 @@
+"""Build the static demo page from a LIVE run of the unmodified kernel.
+
+This is the bridge between the truth layer (`demos/trace_pipeline.py`) and the story layer
+(`demos/demo_template.html`). It runs the verifier + real authorizers, captures the trace, injects
+it into the template, and writes the result to `docs/` so GitHub Pages can serve it.
+
+Because the page is rebuilt from `build_trace()` every time, the published demo is always a
+projection of the current kernel — it cannot silently drift from the code. Wire this into CI
+(see .github/workflows/deploy-demo.yml) and the live URL is, by construction, "generated from the
+unmodified kernel on commit <sha>."
+
+Run:  python -m demos.build_demo          # writes docs/index.html
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+from demos.trace_pipeline import build_trace
+from demos.trace_resolution import build_resolution_trace
+
+ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE = ROOT / "demos" / "demo_template.html"
+OUT_DIR = ROOT / "docs"
+OUT_FILE = OUT_DIR / "index.html"
+
+
+def _git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
+    except Exception:
+        return "local"
+
+
+def main() -> int:
+    trace = build_trace()
+    trace["resolution"] = build_resolution_trace()
+    # A RECORDED eval result (not regenerated here — needs a live model). Optional: if the file is
+    # absent the page simply omits the evidence panel.
+    ad_path = ROOT / "demos" / "agentdojo_result.json"
+    if ad_path.exists():
+        trace["agentdojo"] = json.loads(ad_path.read_text())
+    # Stamp the build so the page can show its own provenance.
+    trace["built_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    trace["built_from"] = _git_sha()
+
+    compact = json.dumps(trace, separators=(",", ":"), default=str)
+    assert "</script" not in compact.lower(), "trace contains a script close tag"
+
+    template = TEMPLATE.read_text()
+    assert "__TRACE_JSON__" in template, "template is missing the __TRACE_JSON__ placeholder"
+    html = template.replace("__TRACE_JSON__", compact)
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_FILE.write_text(html)
+    # A .nojekyll file tells Pages to serve files as-is (no Jekyll processing).
+    (OUT_DIR / ".nojekyll").write_text("")
+
+    print(f"built {OUT_FILE.relative_to(ROOT)}  ({len(html):,} bytes)  "
+          f"from {trace['built_from']} at {trace['built_at']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

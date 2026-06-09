@@ -6,3 +6,6 @@ __pycache__/
 .env
 .env.*
 *.pem
+
+# Generated demo output — CI rebuilds this from the kernel on the `demo` branch.
+docs/

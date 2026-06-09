@@ -1,0 +1,1044 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signet — Enforcement Gauntlet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0E1726; --ink-2:#13202F; --ink-3:#1A2A3D; --ink-4:#21344A;
+    --line:#293D55; --haze:#6B8099; --paper:#DCE6F2; --paper-dim:#A9BBD0;
+    --pass:#36D6A6; --pass-d:#1f8e6c; --block:#FF5D6B; --block-d:#a8323d;
+    --seal:#E6C56A; --seal-d:#9a8035;
+    --review:#E8A13C; --review-d:#9c6a1f;
+    --sig:'Archivo', system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:'JetBrains Mono', ui-monospace, "SF Mono", Menlo, monospace;
+    --r:12px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 700px at 78% -8%, #18293c 0%, rgba(24,41,60,0) 55%),
+      radial-gradient(900px 600px at -5% 12%, #15263a 0%, rgba(21,38,58,0) 50%),
+      var(--ink);
+    color:var(--paper); font-family:var(--mono); font-size:15px; line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1120px; margin:0 auto; padding:34px 22px 90px}
+  a{color:var(--seal)}
+
+  /* ---------- type ---------- */
+  .eyebrow{font-family:var(--mono); font-size:12px; letter-spacing:.32em; text-transform:uppercase;
+    color:var(--haze)}
+  h1{font-family:var(--sig); font-weight:800; letter-spacing:-.015em; line-height:.98;
+    font-size:clamp(38px,7vw,76px); margin:.32em 0 .18em}
+  h1 .glow{color:var(--seal); text-shadow:0 0 30px rgba(230,197,106,.32)}
+  .lede{font-size:clamp(15px,2vw,18px); color:var(--paper-dim); max-width:60ch; margin:0}
+  h2{font-family:var(--sig); font-weight:700; letter-spacing:-.01em; font-size:22px; margin:0}
+  .sig-label{font-family:var(--sig); font-weight:600; letter-spacing:.04em}
+
+  /* ---------- hero band ---------- */
+  header{position:relative; padding-bottom:14px; border-bottom:1px solid var(--line)}
+  .kpi-row{display:flex; gap:30px; flex-wrap:wrap; margin-top:26px}
+  .kpi{display:flex; flex-direction:column; gap:2px}
+  .kpi b{font-family:var(--sig); font-weight:800; font-size:30px; line-height:1}
+  .kpi .pass-c{color:var(--pass)} .kpi .block-c{color:var(--block)} .kpi .seal-c{color:var(--seal)}
+  .kpi span{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--haze)}
+
+  /* ---------- controls ---------- */
+  .controls{display:flex; gap:26px; flex-wrap:wrap; align-items:flex-end; margin:30px 0 8px}
+  .ctl-group{display:flex; flex-direction:column; gap:9px}
+  .ctl-label{font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--haze)}
+  .seg{display:inline-flex; background:var(--ink-2); border:1px solid var(--line);
+    border-radius:11px; padding:4px; gap:3px; max-width:100%; overflow-x:auto}
+  .seg button{font-family:var(--sig); font-weight:600; font-size:13px; letter-spacing:.02em;
+    color:var(--paper-dim); background:transparent; border:0; padding:9px 15px; border-radius:8px;
+    cursor:pointer; transition:.16s; white-space:nowrap}
+  .seg button .sub{display:block; font-family:var(--mono); font-weight:400; font-size:10px;
+    color:var(--haze); letter-spacing:0; margin-top:2px; text-transform:none}
+  .seg button[aria-pressed="true"]{background:var(--ink-4); color:var(--paper);
+    box-shadow:inset 0 0 0 1px var(--line)}
+  .seg button[aria-pressed="true"] .sub{color:var(--paper-dim)}
+  .seg button:hover{color:var(--paper)}
+
+  .chips{display:flex; gap:8px; flex-wrap:wrap}
+  .chip{font-family:var(--mono); font-size:12.5px; color:var(--paper-dim);
+    background:var(--ink-2); border:1px solid var(--line); border-radius:999px;
+    padding:7px 14px; cursor:pointer; transition:.16s; display:inline-flex; gap:8px; align-items:center}
+  .chip .dot{width:7px; height:7px; border-radius:50%; background:var(--block); flex:0 0 auto}
+  .chip.clean .dot{background:var(--pass)}
+  .chip:hover{border-color:var(--haze); color:var(--paper)}
+  .chip[aria-pressed="true"]{color:var(--ink); background:var(--paper); border-color:var(--paper); font-weight:500}
+  .chip[aria-pressed="true"] .dot{box-shadow:0 0 0 2px rgba(14,23,38,.25)}
+
+  /* ---------- main stage ---------- */
+  .stage{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:22px; margin-top:26px}
+  @media(max-width:880px){ .stage{grid-template-columns:1fr} }
+  .panel{background:linear-gradient(180deg, var(--ink-2), #111d2b); border:1px solid var(--line);
+    border-radius:16px; padding:20px}
+  .panel-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:12px}
+  .panel-head .meta{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--haze)}
+
+  /* gauntlet */
+  .gauntlet{position:relative; margin-top:16px; padding-left:30px}
+  .rail-line{position:absolute; left:13px; top:14px; bottom:64px; width:3px;
+    background:var(--ink-4); border-radius:3px; overflow:hidden}
+  .rail-fill{position:absolute; left:0; top:0; width:100%; height:0;
+    background:linear-gradient(180deg,var(--pass),var(--pass-d)); transition:height .2s linear}
+  .rail-fill.is-block{background:linear-gradient(180deg,var(--pass),var(--block))}
+  .carrier{position:absolute; left:6px; top:6px; width:17px; height:17px; border-radius:50%;
+    background:var(--seal); box-shadow:0 0 0 4px rgba(230,197,106,.18), 0 0 16px rgba(230,197,106,.6);
+    transition:top .2s cubic-bezier(.4,0,.2,1); z-index:4}
+  .carrier.is-stopped{background:var(--block); box-shadow:0 0 0 4px rgba(255,93,107,.2),0 0 16px rgba(255,93,107,.6)}
+
+  .gate{display:grid; grid-template-columns:30px 1fr auto; gap:13px; align-items:center;
+    padding:11px 13px; margin-bottom:7px; border:1px solid var(--line); border-radius:10px;
+    background:var(--ink-3); position:relative; transition:.18s; opacity:.5}
+  .gate::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+    border-radius:10px 0 0 10px; background:transparent; transition:.18s}
+  .gate .num{font-family:var(--mono); font-weight:700; font-size:12px; color:var(--haze)}
+  .gate .gname{font-family:var(--sig); font-weight:600; font-size:14.5px; letter-spacing:.01em}
+  .gate .gdesc{font-size:11px; color:var(--haze); line-height:1.35; margin-top:1px;
+    max-height:0; overflow:hidden; transition:max-height .2s}
+  .gate .verdict{font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--haze)}
+  .gate:hover .gdesc, .gate:focus-within .gdesc{max-height:40px}
+  .gate:hover{opacity:1}
+
+  .gate[data-state="pass"]{opacity:1; border-color:rgba(54,214,166,.4)}
+  .gate[data-state="pass"]::before{background:var(--pass)}
+  .gate[data-state="pass"] .num{color:var(--pass)}
+  .gate[data-state="pass"] .verdict{color:var(--pass)}
+  .gate[data-state="block"]{opacity:1; border-color:var(--block); background:#241823;
+    animation:slam .42s cubic-bezier(.36,.07,.19,.97)}
+  .gate[data-state="block"]::before{background:var(--block); width:5px}
+  .gate[data-state="block"] .num{color:var(--block)}
+  .gate[data-state="block"] .verdict{color:var(--block)}
+  .gate[data-state="skip"]{opacity:.32}
+  .gate[data-state="skip"] .verdict{color:var(--ink-4)}
+  @keyframes slam{10%{transform:translateX(-7px)}30%{transform:translateX(6px)}
+    50%{transform:translateX(-4px)}70%{transform:translateX(3px)}100%{transform:translateX(0)}}
+
+  .stamp{grid-column:1 / -1; margin-top:9px; padding:9px 11px; border:1px dashed var(--block);
+    border-radius:8px; background:rgba(255,93,107,.07); color:#ffd2d7; font-size:12px;
+    line-height:1.45; display:none}
+  .gate[data-state="block"] .stamp{display:block}
+
+  /* the bottom gate (irreversible action) */
+  .door{margin-top:16px; margin-left:0; border:1px solid var(--line); border-radius:12px;
+    background:repeating-linear-gradient(45deg,#16243502,#16243502 9px,#1b2c4012 9px,#1b2c4012 18px),var(--ink-2);
+    padding:16px 16px; position:relative; overflow:hidden; transition:.25s}
+  .door .door-top{display:flex; justify-content:space-between; align-items:center; gap:12px}
+  .door .lock{font-family:var(--sig); font-weight:800; font-size:15px; letter-spacing:.02em}
+  .door .effect{font-size:11.5px; color:var(--haze); margin-top:3px}
+  .door .badge{font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.1em;
+    text-transform:uppercase; padding:5px 10px; border-radius:999px; border:1px solid var(--line);
+    color:var(--haze)}
+  .door.is-open{border-color:var(--seal); background:
+    radial-gradient(120% 120% at 50% 0%, rgba(230,197,106,.16), rgba(230,197,106,0) 60%),var(--ink-2);
+    box-shadow:0 0 38px rgba(230,197,106,.14)}
+  .door.is-open .lock{color:var(--seal)}
+  .door.is-open .badge{color:var(--seal); border-color:var(--seal-d)}
+  .door.is-shut{border-color:var(--block-d)}
+  .door.is-shut .badge{color:var(--block); border-color:var(--block-d)}
+  .door .ref{font-family:var(--mono); font-size:11.5px; color:var(--paper-dim); margin-top:10px;
+    display:none}
+  .door.is-open .ref, .door.is-shut .ref{display:block}
+
+  /* run button */
+  .runbtn{font-family:var(--sig); font-weight:700; font-size:14px; letter-spacing:.03em;
+    color:var(--ink); background:var(--seal); border:0; border-radius:9px; padding:11px 20px;
+    cursor:pointer; transition:.16s; display:inline-flex; gap:9px; align-items:center}
+  .runbtn:hover{filter:brightness(1.08)} .runbtn:active{transform:translateY(1px)}
+  .runbtn svg{width:15px;height:15px}
+
+  /* story panel */
+  .story h2{margin-bottom:4px}
+  .story .narr{color:var(--paper-dim); font-size:14px; margin:10px 0 0}
+  .attack-box{margin-top:16px; border:1px solid var(--block-d); border-radius:10px;
+    background:rgba(255,93,107,.06); padding:12px 14px}
+  .attack-box .t{font-family:var(--sig); font-weight:600; font-size:12px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--block); margin-bottom:5px}
+  .attack-box p{margin:0; font-size:13px; color:#ffd2d7}
+
+  .ledger{margin-top:16px; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .ledger .lrow{display:grid; grid-template-columns:120px 1fr; gap:0; border-bottom:1px solid var(--line)}
+  .ledger .lrow:last-child{border-bottom:0}
+  .ledger .lk{background:var(--ink-3); padding:11px 13px; font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--haze); border-right:1px solid var(--line)}
+  .ledger .lv{padding:11px 13px; font-family:var(--mono); font-size:12.5px; word-break:break-all;
+    color:var(--paper)}
+  .ledger .lv .diff{background:rgba(255,93,107,.22); color:#ffd9dd; padding:1px 3px; border-radius:3px}
+  .ledger .lv .same{color:var(--paper-dim)}
+  .ledger .lv .ok{color:var(--pass)}
+
+  .verdict-card{margin-top:16px; border-radius:12px; border:1px solid var(--line); padding:15px 16px}
+  .verdict-card .vtitle{font-family:var(--sig); font-weight:800; font-size:18px; letter-spacing:-.01em;
+    display:flex; align-items:center; gap:10px}
+  .verdict-card .vtitle .pip{width:11px; height:11px; border-radius:50%}
+  .verdict-card .vreason{font-family:var(--mono); font-size:12.5px; margin-top:8px; color:var(--paper-dim);
+    line-height:1.5}
+  .verdict-card.ok{border-color:rgba(54,214,166,.45); background:rgba(54,214,166,.05)}
+  .verdict-card.ok .vtitle{color:var(--pass)} .verdict-card.ok .pip{background:var(--pass)}
+  .verdict-card.bad{border-color:rgba(255,93,107,.45); background:rgba(255,93,107,.05)}
+  .verdict-card.bad .vtitle{color:var(--block)} .verdict-card.bad .pip{background:var(--block)}
+  .verdict-card .note{font-size:12px; color:var(--haze); margin-top:9px; line-height:1.5}
+
+  /* write-a-rail section */
+  .rail-section{margin-top:46px; padding-top:30px; border-top:1px solid var(--line)}
+  .rail-section .intro{max-width:64ch; color:var(--paper-dim); margin:10px 0 22px}
+  .code-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+  @media(max-width:820px){ .code-grid{grid-template-columns:1fr} }
+  .code{background:#0c1622; border:1px solid var(--line); border-radius:12px; overflow:hidden}
+  .code .code-h{padding:11px 15px; border-bottom:1px solid var(--line); display:flex; gap:10px;
+    align-items:center; background:var(--ink-2)}
+  .code .code-h .tag{font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; padding:3px 8px; border-radius:6px}
+  .code .code-h .tag.check{color:var(--pass); border:1px solid var(--pass-d)}
+  .code .code-h .tag.act{color:var(--seal); border:1px solid var(--seal-d)}
+  .code .code-h h3{font-family:var(--sig); font-weight:600; font-size:14px; margin:0}
+  .code pre{margin:0; padding:15px; overflow-x:auto; font-family:var(--mono); font-size:12.5px;
+    line-height:1.65; color:#c6d6ea}
+  .code pre .c{color:#5c7088} .code pre .k{color:#7fb0e0} .code pre .s{color:#9fd9b8}
+  .code pre .f{color:var(--seal)} .code pre .hl{background:rgba(230,197,106,.1)}
+  .frozen{margin-top:20px; border:1px solid var(--line); border-radius:12px; padding:15px 17px;
+    background:var(--ink-2); display:flex; gap:14px; align-items:flex-start}
+  .frozen .b{font-family:var(--sig); font-weight:800; color:var(--seal); font-size:30px; line-height:.9;
+    flex:0 0 auto}
+  .frozen p{margin:0; color:var(--paper-dim); font-size:13.5px}
+  .frozen b{color:var(--paper)}
+
+  /* provenance */
+  .prov{margin-top:42px; border:1px solid var(--seal-d); border-radius:12px; padding:17px 18px;
+    background:linear-gradient(180deg, rgba(230,197,106,.06), rgba(230,197,106,0))}
+  .prov .t{font-family:var(--sig); font-weight:800; font-size:14px; letter-spacing:.04em;
+    text-transform:uppercase; color:var(--seal); margin-bottom:7px}
+  .prov p{margin:0; font-size:13.5px; color:var(--paper-dim)}
+  .prov code{font-family:var(--mono); background:#0c1622; border:1px solid var(--line);
+    padding:2px 7px; border-radius:6px; color:var(--paper); font-size:12.5px}
+
+  .footnote{margin-top:30px; color:var(--haze); font-size:11.5px; text-align:center; letter-spacing:.04em}
+
+  /* ---------- top-level tabs ---------- */
+  .tabs{display:flex; gap:8px; margin:26px 0 4px; border-bottom:1px solid var(--line); padding-bottom:0}
+  .tab{font-family:var(--sig); font-weight:700; font-size:15px; letter-spacing:.01em;
+    color:var(--haze); background:transparent; border:0; padding:12px 4px; margin-right:22px;
+    cursor:pointer; position:relative; transition:.16s}
+  .tab .tnum{font-family:var(--mono); font-size:12px; color:var(--seal); margin-right:8px}
+  .tab::after{content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px;
+    background:transparent; transition:.16s}
+  .tab:hover{color:var(--paper)}
+  .tab[aria-selected="true"]{color:var(--paper)}
+  .tab[aria-selected="true"]::after{background:var(--seal)}
+  .view[hidden]{display:none}
+  .tab.tab-side{font-weight:600; color:var(--haze)}
+  .tab.tab-side[aria-selected="true"]{color:var(--paper)}
+  .side-tag{font-family:var(--mono); font-weight:400; font-size:10px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--haze); border:1px solid var(--line); border-radius:999px;
+    padding:1px 7px; margin-left:9px; vertical-align:middle}
+
+  /* ---------- AgentDojo evidence panel ---------- */
+  .ad{margin-top:34px; border:1px solid var(--line); border-radius:16px; overflow:hidden;
+    background:linear-gradient(180deg, var(--ink-2), #111d2b)}
+  .ad .ad-h{padding:18px 20px 4px}
+  .ad .ad-eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--haze)}
+  .ad .ad-eyebrow b{color:var(--seal); font-weight:700}
+  .ad h2{margin:8px 0 0}
+  .ad .ad-cap{font-family:var(--mono); font-size:11.5px; color:var(--haze); margin-top:4px}
+  .ad-body{display:grid; grid-template-columns:minmax(0,300px) minmax(0,1fr); gap:22px;
+    padding:14px 20px 20px; align-items:center}
+  @media(max-width:760px){ .ad-body{grid-template-columns:1fr} }
+  .ad-big{display:flex; align-items:center; gap:14px}
+  .ad-stat{display:flex; flex-direction:column}
+  .ad-stat .num{font-family:var(--sig); font-weight:800; font-size:46px; line-height:.9}
+  .ad-stat .num.bad{color:var(--block)} .ad-stat .num.good{color:var(--pass)}
+  .ad-stat .lab{font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--haze); margin-top:6px}
+  .ad-arrow{font-family:var(--sig); font-size:28px; color:var(--haze)}
+  .ad-bridge{font-size:13.5px; color:var(--paper-dim); line-height:1.55}
+  .ad-bridge .blocked{font-family:var(--mono); color:var(--pass); font-weight:700}
+  .ad-bridge .step{font-family:var(--mono); color:var(--seal)}
+  .ad-table{margin:0 20px 16px; border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .ad-table .adr{display:grid; grid-template-columns:1.4fr 1fr 1.1fr .8fr .8fr; gap:0;
+    border-bottom:1px solid var(--line)}
+  .ad-table .adr:last-child{border-bottom:0}
+  .ad-table .adr.head{background:var(--ink-3)}
+  .ad-table .adc{padding:9px 12px; font-family:var(--mono); font-size:11.5px; color:var(--paper-dim);
+    border-right:1px solid var(--line)}
+  .ad-table .adc:last-child{border-right:0}
+  .ad-table .adr.head .adc{color:var(--haze); font-size:10px; letter-spacing:.08em; text-transform:uppercase}
+  .ad-table .adc .name{color:var(--paper)}
+  .ad-table .adc.zero{color:var(--pass)} .ad-table .adc.fp1{color:var(--review)}
+  @media(max-width:680px){
+    .ad-table .adr{grid-template-columns:1fr 1fr}
+    .ad-table .adc:nth-child(n+3){border-top:1px solid var(--line)}
+  }
+  .ad-note{padding:0 20px 14px; font-size:12px; color:var(--haze); line-height:1.5}
+  .ad-prov{padding:11px 20px; border-top:1px solid var(--line); background:rgba(230,197,106,.04);
+    font-size:11.5px; color:var(--haze)}
+  .ad-prov b{color:var(--seal)}
+
+  /* ---------- resolution view ---------- */
+  .funnel{position:relative; margin-top:16px; padding-left:30px}
+  .instr{border:1px solid var(--line); border-radius:10px; background:var(--ink-3);
+    padding:12px 14px; margin-bottom:14px}
+  .instr .ilabel{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--haze)}
+  .instr .itext{font-family:var(--sig); font-weight:600; font-size:16px; margin-top:3px}
+  .instr .ikind{font-family:var(--mono); font-size:11px; margin-top:6px; color:var(--seal)}
+
+  .fstage{display:grid; grid-template-columns:26px 1fr auto; gap:13px; align-items:start;
+    padding:11px 13px; margin-bottom:7px; border:1px solid var(--line); border-radius:10px;
+    background:var(--ink-3); position:relative; transition:.18s; opacity:.5}
+  .fstage::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+    border-radius:10px 0 0 10px; background:transparent; transition:.18s}
+  .fstage .ficon{font-family:var(--mono); font-weight:700; font-size:13px; color:var(--haze);
+    line-height:1.5}
+  .fstage .ftitle{font-family:var(--sig); font-weight:600; font-size:14.5px}
+  .fstage .fdetail{font-size:12px; color:var(--paper-dim); line-height:1.45; margin-top:3px}
+  .fstage .fverdict{font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--haze); white-space:nowrap}
+  .fstage[data-rs="pass"]{opacity:1; border-color:rgba(54,214,166,.4)}
+  .fstage[data-rs="pass"]::before{background:var(--pass)}
+  .fstage[data-rs="pass"] .ficon, .fstage[data-rs="pass"] .fverdict{color:var(--pass)}
+  .fstage[data-rs="contain"]{opacity:1; border-color:rgba(54,214,166,.4)}
+  .fstage[data-rs="contain"]::before{background:linear-gradient(180deg,var(--pass),var(--block))}
+  .fstage[data-rs="contain"] .ficon{color:var(--pass)}
+  .fstage[data-rs="contain"] .fverdict{color:var(--block)}
+  .fstage[data-rs="escalate"]{opacity:1; border-color:var(--review); background:#241f17}
+  .fstage[data-rs="escalate"]::before{background:var(--review); width:5px}
+  .fstage[data-rs="escalate"] .ficon, .fstage[data-rs="escalate"] .fverdict{color:var(--review)}
+  .fstage[data-rs="skip"]{opacity:.32}
+  .fstage .chiprow{margin-top:8px; display:flex; gap:6px; flex-wrap:wrap}
+  .idchip{font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:999px;
+    border:1px solid var(--line); color:var(--paper-dim)}
+  .idchip.keep{border-color:var(--pass); color:var(--pass)}
+  .idchip.drop{border-color:var(--block); color:var(--block); text-decoration:line-through}
+
+  .routcome{margin-top:14px; border-radius:12px; border:1px solid var(--line); padding:15px 16px}
+  .routcome .rtitle{font-family:var(--sig); font-weight:800; font-size:18px; display:flex;
+    align-items:center; gap:10px}
+  .routcome .rtitle .pip{width:11px; height:11px; border-radius:50%}
+  .routcome.proceeds{border-color:rgba(230,197,106,.45); background:rgba(230,197,106,.05)}
+  .routcome.proceeds .rtitle{color:var(--seal)} .routcome.proceeds .pip{background:var(--seal)}
+  .routcome.escalate{border-color:rgba(232,161,60,.45); background:rgba(232,161,60,.05)}
+  .routcome.escalate .rtitle{color:var(--review)} .routcome.escalate .pip{background:var(--review)}
+  .routcome .rnote{font-size:12.5px; color:var(--paper-dim); margin-top:8px; line-height:1.5}
+  .handoff-btn{margin-top:12px; font-family:var(--sig); font-weight:700; font-size:13px;
+    color:var(--ink); background:var(--seal); border:0; border-radius:9px; padding:10px 16px;
+    cursor:pointer; transition:.16s}
+  .handoff-btn:hover{filter:brightness(1.08)}
+  .mandate-str{font-family:var(--mono); font-size:11.5px; color:var(--paper-dim); margin-top:10px;
+    word-break:break-all}
+
+  /* candidates + model panel (right side of resolution stage) */
+  .cand{border:1px solid var(--line); border-radius:10px; background:var(--ink-3);
+    padding:11px 13px; margin-bottom:8px}
+  .cand .ctop{display:flex; justify-content:space-between; gap:10px; align-items:baseline}
+  .cand .cpr{font-family:var(--sig); font-weight:700; font-size:14px}
+  .cand .cmeta{font-family:var(--mono); font-size:11px; color:var(--haze)}
+  .cand .cfiles{font-family:var(--mono); font-size:11.5px; color:var(--paper-dim); margin-top:4px;
+    word-break:break-all}
+  .cand .cbadge{font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; padding:2px 7px; border-radius:999px; border:1px solid var(--review-d);
+    color:var(--review)}
+  .quar-note{border:1px solid var(--block-d); border-radius:10px; background:rgba(255,93,107,.06);
+    padding:11px 13px; margin-top:12px}
+  .quar-note .qt{font-family:var(--sig); font-weight:600; font-size:11px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--block); margin-bottom:5px}
+  .quar-note .qbody{font-family:var(--mono); font-size:12px; color:#ffd2d7; word-break:break-word}
+  .quar-note .qtag{font-size:11px; color:var(--haze); margin-top:6px}
+  .rawbox{border:1px solid var(--line); border-radius:10px; background:#0c1622; margin-top:12px;
+    overflow:hidden}
+  .rawbox .rh{padding:8px 12px; border-bottom:1px solid var(--line); background:var(--ink-2);
+    font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--haze);
+    display:flex; justify-content:space-between}
+  .rawbox .rh .seal-tag{color:var(--haze)}
+  .rawbox pre{margin:0; padding:12px; font-family:var(--mono); font-size:11.5px; color:#c6d6ea;
+    white-space:pre-wrap; word-break:break-word}
+
+  /* quarantine bench (full width below resolution stage) */
+  .bench{margin-top:22px; border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .bench .bh{padding:14px 16px; background:var(--ink-2); border-bottom:1px solid var(--line)}
+  .bench .bh h3{font-family:var(--sig); font-weight:700; font-size:15px; margin:0}
+  .bench .bh p{margin:5px 0 0; font-size:12.5px; color:var(--paper-dim)}
+  .brow{display:grid; grid-template-columns:1fr 150px 1fr; gap:0; border-bottom:1px solid var(--line);
+    align-items:center}
+  .brow:last-child{border-bottom:0}
+  @media(max-width:760px){ .brow{grid-template-columns:1fr} }
+  .brow .bin{padding:11px 14px; font-family:var(--mono); font-size:11.5px; color:#c6d6ea;
+    word-break:break-all}
+  .brow .barrow{padding:11px 14px; font-family:var(--mono); font-size:11px; color:var(--haze);
+    text-align:center}
+  .brow .bout{padding:11px 14px; font-family:var(--mono); font-size:12px; color:var(--paper-dim);
+    border-left:1px solid var(--line)}
+  @media(max-width:760px){ .brow .bout{border-left:0; border-top:1px solid var(--line)} }
+  .brow .bout .keep{color:var(--pass); font-weight:700}
+  .brow .bout .empty{color:var(--review); font-weight:700}
+  .brow .bnote{grid-column:1 / -1; padding:0 14px 11px; font-size:11.5px; color:var(--haze)}
+
+
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none !important; animation:none !important}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Signet Runtime · enforcement by design</div>
+    <h1>The agent never<br>holds <span class="glow">the key.</span></h1>
+    <p class="lede" id="lede">An authorized action and six attacks, each routed through the same eleven-check
+      kernel. Pick one and watch where it gets stopped — or whether it reaches the gate at the
+      bottom, the one irreversible thing the enforcer alone can open.</p>
+    <div class="kpi-row">
+      <div class="kpi"><b class="pass-c">11</b><span>ordered checks</span></div>
+      <div class="kpi"><b class="block-c" id="kpi-blocked">6</b><span>attacks stopped</span></div>
+      <div class="kpi"><b class="seal-c">3</b><span>rails, one kernel</span></div>
+      <div class="kpi"><b>2</b><span>functions to add a rail</span></div>
+    </div>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Demo sections">
+    <button class="tab" id="tab-enforcement" role="tab" aria-selected="true"
+      aria-controls="view-enforcement">Enforcement — the gauntlet</button>
+    <button class="tab tab-side" id="tab-resolution" role="tab" aria-selected="false"
+      aria-controls="view-resolution">Resolution — which PR?<span class="side-tag">upstream</span></button>
+  </div>
+
+  <div class="view" id="view-enforcement" role="tabpanel" aria-labelledby="tab-enforcement">
+  <div class="controls">
+    <div class="ctl-group">
+      <div class="ctl-label">Rail — the irreversible action</div>
+      <div class="seg" id="rail-seg" role="group" aria-label="Choose a rail"></div>
+    </div>
+  </div>
+  <div class="ctl-group" style="margin-top:14px">
+    <div class="ctl-label">Scenario</div>
+    <div class="chips" id="scenario-chips" role="group" aria-label="Choose a scenario"></div>
+  </div>
+
+  <div class="stage">
+    <!-- LEFT: the gauntlet -->
+    <div class="panel">
+      <div class="panel-head">
+        <h2>The gauntlet</h2>
+        <button class="runbtn" id="run">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <span id="run-label">Run it</span>
+        </button>
+      </div>
+      <div class="panel-head"><div class="meta" id="rail-meta"></div></div>
+
+      <div class="gauntlet" id="gauntlet">
+        <div class="rail-line"><div class="rail-fill" id="rail-fill"></div></div>
+        <div class="carrier" id="carrier"></div>
+        <div id="gates"></div>
+        <div class="door" id="door">
+          <div class="door-top">
+            <div>
+              <div class="lock" id="door-lock">Gate · locked</div>
+              <div class="effect" id="door-effect"></div>
+            </div>
+            <div class="badge" id="door-badge">awaiting</div>
+          </div>
+          <div class="ref" id="door-ref"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: the story -->
+    <div class="panel story">
+      <div class="panel-head"><h2 id="story-title"></h2></div>
+      <p class="narr" id="story-narr"></p>
+      <div class="attack-box" id="attack-box">
+        <div class="t">What the agent tried</div>
+        <p id="attack-text"></p>
+      </div>
+      <div class="ledger" id="ledger"></div>
+      <div class="verdict-card" id="verdict"></div>
+    </div>
+  </div>
+
+  <!-- MEASURED ON AGENTDOJO (recorded result, rendered from data) -->
+  <div id="ad-panel"></div>
+
+  <!-- WRITE A RAIL -->
+  <section class="rail-section">
+    <h2>Writing a rail is two functions</h2>
+    <p class="intro">Every rail above is the same template. The kernel decides; a rail only turns
+      that decision into one rail-specific necessary input — a check run, a deploy gate, an apply
+      gate. You fill in two hooks. The order, the token check, and fail-closed live in the base
+      class, where a rail can't skip them.</p>
+    <div class="code-grid">
+      <div class="code">
+        <div class="code-h"><span class="tag check">guard</span>
+          <h3>recheck_against_context</h3></div>
+        <pre><span class="c"># no side effects — runs BEFORE any capability</span>
+<span class="k">def</span> <span class="f">recheck_against_context</span>(self, token, req):
+    recomputed = chain.<span class="f">chain_hash</span>(req.intent,
+                              req.cart, req.payment)
+    bound = (recomputed == token.chain_hash
+             <span class="k">and</span> self.<span class="f">_well_formed</span>(req)
+             <span class="k">and</span> self.<span class="f">_context_matches_cart</span>(req))
+    <span class="k">if not</span> bound:
+        <span class="k">return</span> (<span class="s">False</span>, <span class="s">"effect/context mismatch "</span>
+                       <span class="s">"vs the approved Cart"</span>)
+    <span class="k">return</span> <span class="s">True</span>, <span class="s">"bound to this transaction"</span></pre>
+      </div>
+      <div class="code">
+        <div class="code-h"><span class="tag act">effect</span>
+          <h3>produce_capability</h3></div>
+        <pre><span class="c"># reached ONLY when token + recheck both pass</span>
+<span class="k">def</span> <span class="f">produce_capability</span>(self, token, req):
+    head_sha = <span class="f">_parse_head_sha</span>(req.context.recipient)
+    check = self._rail.<span class="f">open_check</span>(
+        token.chain_hash, head_sha)
+    ref = self._rail.<span class="f">conclude</span>(
+        check, token.chain_hash, <span class="s">"success"</span>)
+    <span class="c"># the protected-branch merge gate is satisfied</span>
+    <span class="k">return</span> <span class="f">AuthorizationResult</span>(
+        <span class="s">True</span>, <span class="s">"gate satisfied"</span>, payment_ref=ref)</pre>
+      </div>
+    </div>
+    <div class="frozen">
+      <div class="b">↑</div>
+      <p><b>Switching rails above changed only these two functions and the gate at the bottom.</b>
+      The eleven checks never moved — they're the kernel, and the kernel stays rail-agnostic. That's
+      why an attack lands on the same check whether it's a merge, a deploy, or an infra apply.</p>
+    </div>
+  </section>
+  </div><!-- /view-enforcement -->
+
+  <div class="view" id="view-resolution" role="tabpanel" aria-labelledby="tab-resolution" hidden>
+    <div class="ctl-group" style="margin-top:22px">
+      <div class="ctl-label">Instruction the operator gave</div>
+      <div class="chips" id="res-chips" role="group" aria-label="Choose a resolution scenario"></div>
+    </div>
+
+    <div class="stage">
+      <!-- LEFT: the funnel -->
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Which PR?</h2>
+          <button class="runbtn" id="res-run">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <span id="res-run-label">Run it</span>
+          </button>
+        </div>
+        <div class="panel-head"><div class="meta">role A trusted · role B quarantined · the model's
+          conclusion is never authority</div></div>
+
+        <div class="funnel" id="funnel">
+          <div class="instr" id="res-instr"></div>
+          <div id="res-stages"></div>
+          <div class="routcome" id="res-outcome"></div>
+        </div>
+      </div>
+
+      <!-- RIGHT: candidates + the model -->
+      <div class="panel story">
+        <div class="panel-head"><h2 id="res-title"></h2></div>
+        <p class="narr" id="res-narr"></p>
+        <div style="margin-top:16px"><div class="ctl-label" style="margin-bottom:8px">Owned
+          candidates (untrusted runtime data)</div><div id="res-cands"></div></div>
+        <div id="res-quar"></div>
+        <div id="res-raw"></div>
+      </div>
+    </div>
+
+    <!-- the quarantine bench -->
+    <div class="bench">
+      <div class="bh">
+        <h3>The quarantine bench</h3>
+        <p>Fixed Role B outputs — some malformed, some openly adversarial — through the real clamp,
+          owned set {1, 2, 5}. A compromised model can't widen its own authority; the constraint is
+          enforced at the boundary, not trusted to the model.</p>
+      </div>
+      <div id="bench-rows"></div>
+    </div>
+  </div><!-- /view-resolution -->
+
+  <!-- PROVENANCE -->
+  <div class="prov">
+    <div class="t">Not a mockup</div>
+    <p>The gauntlet and resolution verdicts here are regenerated from the unmodified kernel on every
+      build (<code>python -m demos.build_demo</code>) — the reason strings are the verifier's own
+      output, not narration. The AgentDojo figures are a recorded run on a live model (gpt-4o-mini),
+      reproducible with the eval harness — the one thing on this page not regenerated by the build.
+      Swap a live GitHub App, a real promotion controller, or a Terraform runner in for the mock rail
+      and the same gauntlet trace plays against your workflow.</p>
+  </div>
+
+  <div class="footnote" id="footnote"></div>
+
+</div>
+
+<script id="trace" type="application/json">__TRACE_JSON__</script>
+<script>
+(function(){
+  "use strict";
+  const TRACE = JSON.parse(document.getElementById('trace').textContent);
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const els = {
+    railSeg: document.getElementById('rail-seg'),
+    chips: document.getElementById('scenario-chips'),
+    gates: document.getElementById('gates'),
+    railFill: document.getElementById('rail-fill'),
+    carrier: document.getElementById('carrier'),
+    door: document.getElementById('door'),
+    doorLock: document.getElementById('door-lock'),
+    doorEffect: document.getElementById('door-effect'),
+    doorBadge: document.getElementById('door-badge'),
+    doorRef: document.getElementById('door-ref'),
+    railMeta: document.getElementById('rail-meta'),
+    storyTitle: document.getElementById('story-title'),
+    storyNarr: document.getElementById('story-narr'),
+    attackBox: document.getElementById('attack-box'),
+    attackText: document.getElementById('attack-text'),
+    ledger: document.getElementById('ledger'),
+    verdict: document.getElementById('verdict'),
+    run: document.getElementById('run'),
+    runLabel: document.getElementById('run-label'),
+    footnote: document.getElementById('footnote'),
+  };
+
+  let railIdx = 0, scenIdx = 0, playToken = 0;
+
+  function rail(){ return TRACE.rails[railIdx]; }
+  function scen(){ return rail().scenarios[scenIdx]; }
+
+  // ----- build rail segmented control -----
+  TRACE.rails.forEach((r, i)=>{
+    const b = document.createElement('button');
+    b.setAttribute('aria-pressed', i===0 ? 'true':'false');
+    b.innerHTML = r.label + '<span class="sub">'+r.effect+'</span>';
+    b.addEventListener('click', ()=>{ railIdx=i; syncRailSeg(); buildChips(); selectScenario(scenIdx); });
+    els.railSeg.appendChild(b);
+  });
+  function syncRailSeg(){
+    [...els.railSeg.children].forEach((b,i)=>b.setAttribute('aria-pressed', i===railIdx?'true':'false'));
+  }
+
+  // ----- build scenario chips -----
+  function buildChips(){
+    els.chips.innerHTML='';
+    rail().scenarios.forEach((s,i)=>{
+      const c = document.createElement('button');
+      c.className = 'chip' + (s.outcome==='approved'?' clean':'');
+      c.setAttribute('aria-pressed', i===scenIdx?'true':'false');
+      c.innerHTML = '<span class="dot"></span>'+s.scenario;
+      c.addEventListener('click', ()=> selectScenario(i));
+      els.chips.appendChild(c);
+    });
+  }
+  function syncChips(){
+    [...els.chips.children].forEach((c,i)=>c.setAttribute('aria-pressed', i===scenIdx?'true':'false'));
+  }
+
+  // ----- build the 11 gates (static skeleton, re-stated per rail) -----
+  function buildGates(){
+    els.gates.innerHTML='';
+    TRACE.steps_legend.forEach(st=>{
+      const g = document.createElement('div');
+      g.className='gate'; g.dataset.state='idle'; g.dataset.n=st.n; g.tabIndex=0;
+      g.innerHTML =
+        '<div class="num">'+String(st.n).padStart(2,'0')+'</div>'+
+        '<div><div class="gname">'+st.name+'</div>'+
+        '<div class="gdesc">'+st.desc+'</div></div>'+
+        '<div class="verdict">—</div>'+
+        '<div class="stamp"></div>';
+      els.gates.appendChild(g);
+    });
+  }
+
+  function gateEls(){ return [...els.gates.querySelectorAll('.gate')]; }
+
+  // ----- ledger diff -----
+  function renderLedger(s){
+    const r = rail();
+    const a = s.recipient_cart, b = s.recipient_runtime;
+    // common prefix / suffix diff
+    let pre=0; while(pre<a.length && pre<b.length && a[pre]===b[pre]) pre++;
+    let suf=0; while(suf<a.length-pre && suf<b.length-pre &&
+                     a[a.length-1-suf]===b[b.length-1-suf]) suf++;
+    const fmt = (str)=>{
+      if(a===b) return '<span class="same">'+str+'</span>';
+      const head = str.slice(0,pre), mid = str.slice(pre, str.length-suf), tail = str.slice(str.length-suf);
+      return '<span class="same">'+head+'</span><span class="diff">'+mid+'</span><span class="same">'+tail+'</span>';
+    };
+    const signedV = a===b ? '<span class="ok">'+a+'</span>' : fmt(a);
+    const ranV = a===b ? '<span class="ok">'+b+'</span>' : fmt(b);
+    els.ledger.innerHTML =
+      '<div class="lrow"><div class="lk">Cart says</div><div class="lv">'+signedV+'</div></div>'+
+      '<div class="lrow"><div class="lk">Runtime says</div><div class="lv">'+ranV+'</div></div>'+
+      '<div class="lrow"><div class="lk">chain_hash</div><div class="lv"><span class="same">'+s.chain_hash+'…</span></div></div>';
+  }
+
+  // ----- verdict card (final, set after play completes) -----
+  function renderVerdict(s){
+    const r = rail();
+    if(s.outcome==='approved'){
+      els.verdict.className='verdict-card ok';
+      els.verdict.innerHTML =
+        '<div class="vtitle"><span class="pip"></span>Approved — '+r.gate_label+' '+r.gate_open+'</div>'+
+        '<div class="vreason">'+s.reason+'</div>'+
+        '<div class="note">All eleven checks passed, so the enforcer minted a one-time, '+
+        'transaction-bound token and opened the gate. Reference: '+(s.gate? s.gate.ref : '—')+'.</div>';
+    } else {
+      const step = TRACE.steps_legend[s.blocked_step-1];
+      els.verdict.className='verdict-card bad';
+      els.verdict.innerHTML =
+        '<div class="vtitle"><span class="pip"></span>Stopped at check '+s.blocked_step+' — '+step.name+'</div>'+
+        '<div class="vreason">'+s.reason+'</div>'+
+        '<div class="note">No token was issued, so the '+r.gate_label.toLowerCase()+
+        ' was never reachable. The attempt is recorded as a failure — not silence — and is '+
+        'independently verifiable from the signed log.</div>';
+    }
+  }
+
+  // ----- the play animation -----
+  function play(){
+    const s = scen(); const r = rail(); const my = ++playToken;
+    const gates = gateEls();
+    // reset
+    gates.forEach(g=>{ g.dataset.state='idle'; g.querySelector('.verdict').textContent='—';
+      g.querySelector('.stamp').textContent=''; });
+    els.railFill.style.height='0'; els.railFill.className='rail-fill';
+    els.carrier.className='carrier'; els.carrier.style.top='6px';
+    els.door.className='door'; els.doorLock.textContent='Gate · locked';
+    els.doorBadge.textContent='awaiting'; els.doorRef.textContent='';
+    els.verdict.className='verdict-card'; els.verdict.innerHTML=
+      '<div class="vreason" style="color:var(--haze)">Running the eleven checks…</div>';
+    els.run.disabled = true;
+
+    const lastIdx = s.outcome==='approved' ? gates.length-1 : (s.blocked_step-1);
+    const stepDelay = reduce ? 0 : 150;
+
+    const moveCarrier = (idx)=>{
+      const g = gates[idx];
+      els.carrier.style.top = (g.offsetTop + g.offsetHeight/2 - 8) + 'px';
+      const total = els.gates.offsetHeight;
+      const fillTo = g.offsetTop + g.offsetHeight/2;
+      els.railFill.style.height = Math.min(100, (fillTo/ (total+0)) *100) + '%';
+    };
+
+    const resolveGate = (idx)=>{
+      const g = gates[idx]; const st = s.steps[idx];
+      g.dataset.state = st.state;
+      const v = g.querySelector('.verdict');
+      if(st.state==='pass'){ v.textContent='pass'; }
+      else if(st.state==='block'){
+        v.textContent='stop';
+        g.querySelector('.stamp').textContent = '⛔ '+s.reason;
+        els.carrier.classList.add('is-stopped');
+        els.railFill.classList.add('is-block');
+      }
+    };
+
+    let i=0;
+    const tick = ()=>{
+      if(my!==playToken) return;            // a newer play superseded this one
+      if(i>lastIdx){ finish(); return; }
+      moveCarrier(i); resolveGate(i);
+      const blocked = s.steps[i].state==='block';
+      i++;
+      if(blocked){ finish(); return; }
+      setTimeout(tick, stepDelay);
+    };
+
+    const finish = ()=>{
+      if(my!==playToken) return;
+      // mark any not-reached gates as skip
+      s.steps.forEach((st,idx)=>{ if(gates[idx].dataset.state==='idle' && st.state==='skip'){
+        gates[idx].dataset.state='skip'; gates[idx].querySelector('.verdict').textContent='—'; }});
+      if(s.outcome==='approved'){
+        // open the door
+        setTimeout(()=>{
+          if(my!==playToken) return;
+          els.carrier.style.top = (els.door.offsetTop + 14) + 'px';
+          els.door.classList.add('is-open');
+          els.doorLock.textContent='Gate · open';
+          els.doorBadge.textContent=r.gate_open;
+          els.doorRef.textContent = '↳ token minted · '+r.gate_label+' = '+s.gate.ref;
+        }, reduce?0:stepDelay);
+      } else {
+        els.door.classList.add('is-shut');
+        els.doorLock.textContent='Gate · never reached';
+        els.doorBadge.textContent='not concluded';
+        els.doorRef.textContent='↳ no token issued — recorded as failure';
+      }
+      renderVerdict(s);
+      els.run.disabled=false;
+      els.runLabel.textContent='Replay';
+    };
+
+    if(reduce){
+      // resolve everything instantly
+      for(let k=0;k<=lastIdx;k++){ moveCarrier(k); resolveGate(k); }
+      finish();
+    } else {
+      setTimeout(tick, 120);
+    }
+  }
+
+  // ----- select a scenario -----
+  function selectScenario(i, autoplay){
+    if(autoplay===undefined) autoplay=true;
+    scenIdx = i; syncChips();
+    const s = scen(); const r = rail();
+    els.railMeta.textContent = 'rail = '+r.id+'  ·  binds '+r.bind+'  ·  gate = '+r.gate_label;
+    els.doorEffect.textContent = r.effect;
+    els.storyTitle.textContent = s.scenario;
+    els.storyNarr.textContent = s.narrative;
+    if(s.attack){ els.attackBox.style.display='block'; els.attackText.textContent = s.attack; }
+    else { els.attackBox.style.display='none'; }
+    renderLedger(s);
+    els.runLabel.textContent='Run it';
+    if(autoplay) play();
+  }
+
+  // ================= RESOLUTION TAB =================
+  const RES = TRACE.resolution || {scenarios:[], quarantine:[]};
+  const resEls = {
+    chips: document.getElementById('res-chips'),
+    instr: document.getElementById('res-instr'),
+    stages: document.getElementById('res-stages'),
+    outcome: document.getElementById('res-outcome'),
+    title: document.getElementById('res-title'),
+    narr: document.getElementById('res-narr'),
+    cands: document.getElementById('res-cands'),
+    quar: document.getElementById('res-quar'),
+    raw: document.getElementById('res-raw'),
+    bench: document.getElementById('bench-rows'),
+    run: document.getElementById('res-run'),
+    runLabel: document.getElementById('res-run-label'),
+  };
+  let resIdx = 0, resToken = 0;
+  const FVERDICT = {pass:'pass', contain:'clamped', escalate:'review', skip:'—'};
+
+  function buildResChips(){
+    resEls.chips.innerHTML='';
+    RES.scenarios.forEach((s,i)=>{
+      const c=document.createElement('button');
+      c.className='chip'+(s.outcome==='proceeds'?' clean':'');
+      c.setAttribute('aria-pressed', i===resIdx?'true':'false');
+      c.innerHTML='<span class="dot"></span>'+s.label;
+      c.addEventListener('click', ()=>selectRes(i));
+      resEls.chips.appendChild(c);
+    });
+  }
+  function syncResChips(){
+    [...resEls.chips.children].forEach((c,i)=>c.setAttribute('aria-pressed', i===resIdx?'true':'false'));
+  }
+
+  function renderCandidates(s){
+    resEls.cands.innerHTML = s.owned.map(c=>{
+      const badge = c.protected ? '<span class="cbadge">protected</span>' : '';
+      const meta = [c.closes_issue!=null?('closes #'+c.closes_issue):'', c.status].filter(Boolean).join(' · ');
+      return '<div class="cand"><div class="ctop"><span class="cpr">PR #'+c.pr+' — '+c.title+'</span>'
+        +badge+'</div><div class="cmeta">'+meta+'</div>'
+        +'<div class="cfiles">'+c.files.join(', ')+'</div></div>';
+    }).join('');
+    // injected note (quarantined)
+    if(s.injected_note){
+      resEls.quar.innerHTML = '<div class="quar-note"><div class="qt">Injection in the untrusted data</div>'
+        +'<div class="qbody">'+s.injected_note+'</div>'
+        +'<div class="qtag">Role A never reads this. Role B may — but its conclusion isn\'t authority.</div></div>';
+    } else { resEls.quar.innerHTML=''; }
+    // the raw model output, when a model was called
+    const rb = s.stages.find(st=>st.stage==='roleB' && st.raw);
+    if(rb && rb.raw){
+      resEls.raw.innerHTML = '<div class="rawbox"><div class="rh"><span>Role B raw output</span>'
+        +'<span class="seal-tag">captured · never trusted</span></div><pre>'+rb.raw+'</pre></div>';
+    } else { resEls.raw.innerHTML=''; }
+  }
+
+  function renderResOutcome(s){
+    if(s.outcome==='proceeds'){
+      resEls.outcome.className='routcome proceeds';
+      let html='<div class="rtitle"><span class="pip"></span>Resolved — one bound target</div>'
+        +'<div class="rnote">Exactly one owned PR survived every layer. It becomes a ClosedMandate '
+        +'and enters the gauntlet — from here the kernel doesn\'t know any resolution happened.</div>';
+      if(s.handoff){
+        html+='<div class="mandate-str">→ '+s.handoff.closed_mandate+'</div>'
+          +'<button class="handoff-btn" id="handoff">Watch it run the gauntlet →</button>';
+      }
+      resEls.outcome.innerHTML=html;
+      const hb=document.getElementById('handoff');
+      if(hb) hb.addEventListener('click', ()=>{
+        // jump to enforcement, github / Authorized merge
+        railIdx = TRACE.rails.findIndex(r=>r.id===(s.handoff.to_rail||'github'));
+        if(railIdx<0) railIdx=0; syncRailSeg(); buildChips();
+        showTab('enforcement');
+        selectScenario(0, true);  // Authorized merge
+      });
+    } else {
+      const where = {roleA:'Role A', layerA:'Layer A', cardinality:'the cardinality rule',
+        fence:'the fence'}[s.escalated_at] || s.escalated_at;
+      resEls.outcome.className='routcome escalate';
+      resEls.outcome.innerHTML='<div class="rtitle"><span class="pip"></span>Escalated to a human</div>'
+        +'<div class="rnote">Stopped at '+where+'. This is the safe outcome, not a failure: the system '
+        +'abstains rather than guess. No mandate is built, so nothing reaches the gauntlet.</div>';
+    }
+  }
+
+  function playRes(){
+    const s = RES.scenarios[resIdx]; const my = ++resToken;
+    const rows = [...resEls.stages.querySelectorAll('.fstage')];
+    rows.forEach(r=>{ r.dataset.rs='idle'; });
+    resEls.outcome.className='routcome';
+    resEls.outcome.innerHTML='<div class="rnote" style="color:var(--haze)">Resolving…</div>';
+    resEls.run.disabled=true;
+    const delay = reduce?0:170;
+    let i=0;
+    const tick=()=>{
+      if(my!==resToken) return;
+      if(i>=rows.length){ if(my===resToken){ renderResOutcome(s); resEls.run.disabled=false;
+        resEls.runLabel.textContent='Replay'; } return; }
+      const st = s.stages[i];
+      rows[i].dataset.rs = st.state;
+      i++;
+      if(st.state==='escalate'){
+        // stop revealing further; remaining stages are unreached
+        for(let k=i;k<rows.length;k++) rows[k].dataset.rs = s.stages[k].state==='skip'?'skip':'skip';
+        renderResOutcome(s); resEls.run.disabled=false; resEls.runLabel.textContent='Replay';
+        return;
+      }
+      setTimeout(tick, delay);
+    };
+    if(reduce){ rows.forEach((r,k)=>r.dataset.rs=s.stages[k].state); renderResOutcome(s);
+      resEls.run.disabled=false; resEls.runLabel.textContent='Replay'; }
+    else setTimeout(tick, 110);
+  }
+
+  function selectRes(i){
+    resIdx=i; syncResChips();
+    const s=RES.scenarios[i];
+    resEls.instr.innerHTML='<div class="ilabel">Operator instruction (trusted)</div>'
+      +'<div class="itext">“'+s.instruction+'”</div>'
+      +'<div class="ikind">Role A reads this and only this → predicate kind: '+s.kind+'</div>';
+    resEls.title.textContent=s.label;
+    resEls.narr.textContent=s.narrative;
+    // build stage rows
+    resEls.stages.innerHTML = s.stages.map(st=>{
+      let extra='';
+      if(st.stage==='roleB' && st.returned){
+        extra='<div class="chiprow">'+st.returned.map(x=>'<span class="idchip">#'+x+'</span>').join('')+'</div>';
+      }
+      if(st.stage==='clamp' && st.state!=='skip'){
+        const keep=(st.picks||[]).map(p=>'<span class="idchip keep">#'+p+' kept</span>').join('');
+        const drop=(st.dropped||[]).map(p=>'<span class="idchip drop">#'+p+' dropped</span>').join('');
+        extra='<div class="chiprow">'+keep+drop+'</div>';
+      }
+      return '<div class="fstage" data-rs="idle"><div class="ficon">▸</div>'
+        +'<div><div class="ftitle">'+st.title+'</div>'
+        +'<div class="fdetail">'+st.detail+'</div>'+extra+'</div>'
+        +'<div class="fverdict">'+(FVERDICT[st.state]||'')+'</div></div>';
+    }).join('');
+    renderCandidates(s);
+    resEls.runLabel.textContent='Run it';
+    playRes();
+  }
+
+  function buildBench(){
+    resEls.bench.innerHTML = (RES.quarantine||[]).map(b=>{
+      const out = b.picks.length
+        ? '<span class="keep">{ '+b.picks.map(p=>'#'+p).join(', ')+' }</span>'
+        : '<span class="empty">{ } → escalate</span>';
+      return '<div class="brow"><div class="bin">'+escapeHtml(b.raw)+'</div>'
+        +'<div class="barrow">— clamp →</div><div class="bout">'+out+'</div>'
+        +'<div class="bnote">'+b.note+'</div></div>';
+    }).join('');
+  }
+  function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ================= AGENTDOJO EVIDENCE PANEL =================
+  function renderAgentDojo(){
+    const ad = TRACE.agentdojo;
+    const host = document.getElementById('ad-panel');
+    if(!host) return;
+    if(!ad){ host.innerHTML=''; return; }
+    const rows = (ad.providers||[]).map(p=>
+      '<div class="adr"><div class="adc"><span class="name">'+p.name+'</span></div>'
+      +'<div class="adc">'+p.enforcement_rate+'</div>'
+      +'<div class="adc">'+p.failures+'</div>'
+      +'<div class="adc'+(p.fp==='1.00'?' fp1':'')+'">'+p.fp+'</div>'
+      +'<div class="adc zero">'+p.asr+'</div></div>').join('');
+    host.innerHTML =
+      '<div class="ad">'
+      +'<div class="ad-h"><div class="ad-eyebrow">Measured · <b>independent benchmark</b></div>'
+      +'<h2>The same check, measured</h2>'
+      +'<div class="ad-cap">'+ad.label+'</div></div>'
+      +'<div class="ad-body">'
+        +'<div class="ad-big">'
+          +'<div class="ad-stat"><span class="num bad">'+ad.headline.asr_baseline+'</span>'
+          +'<span class="lab">ASR · without the gate</span></div>'
+          +'<div class="ad-arrow">→</div>'
+          +'<div class="ad-stat"><span class="num good">'+ad.headline.asr_signet+'</span>'
+          +'<span class="lab">ASR · with Signet</span></div>'
+        +'</div>'
+        +'<div class="ad-bridge"><span class="blocked">'+ad.headline.blocked
+          +' unauthorized calls blocked, '+ad.headline.enforcement_failures_oracle
+          +' enforcement failures.</span> '+ad.bridge+'</div>'
+      +'</div>'
+      +'<div class="ad-table">'
+        +'<div class="adr head"><div class="adc">Authorized-intent provider</div>'
+        +'<div class="adc">Enforcement</div><div class="adc">Failures</div>'
+        +'<div class="adc">False pos.</div><div class="adc">ASR</div></div>'
+        +rows
+      +'</div>'
+      +'<div class="ad-note">'+ad.provider_note+'</div>'
+      +'<div class="ad-prov"><b>Provenance.</b> '+ad.provenance+'</div>'
+      +'</div>';
+  }
+
+  // ================= TABS =================
+  let enforcementPlayed=false, resolutionPlayed=false;
+  const LEDE = {
+    resolution: "A fuzzy instruction has to be turned into one specific PR — and that means "
+      +"reading untrusted data. Watch how the target is found without letting the model's "
+      +"conclusion become authority, then handed to the gauntlet.",
+    enforcement: "An authorized action and six attacks, each routed through the same eleven-check "
+      +"kernel. Pick one and watch where it gets stopped — or whether it reaches the gate at the "
+      +"bottom, the one irreversible thing the enforcer alone can open.",
+  };
+  function showTab(which){
+    const onRes = which==='resolution';
+    document.getElementById('view-resolution').hidden = !onRes;
+    document.getElementById('view-enforcement').hidden = onRes;
+    document.getElementById('tab-resolution').setAttribute('aria-selected', onRes?'true':'false');
+    document.getElementById('tab-enforcement').setAttribute('aria-selected', onRes?'false':'true');
+    document.getElementById('lede').textContent = LEDE[which];
+    if(onRes && !resolutionPlayed){ resolutionPlayed=true; selectRes(0); }
+  }
+
+  // ----- init -----
+  function init(){
+    document.getElementById('kpi-blocked').textContent =
+      rail().scenarios.filter(s=>s.outcome==='blocked').length;
+    const stamp = (TRACE.built_from && TRACE.built_at)
+      ? '  ·  generated from '+TRACE.built_from+' at '+TRACE.built_at : '';
+    els.footnote.textContent = TRACE.subtitle + stamp;
+    // enforcement is the main/default tab -> play eagerly (it is visible at load).
+    syncRailSeg(); buildGates(); buildChips();
+    els.run.addEventListener('click', play);
+    enforcementPlayed = true; selectScenario(0, true);
+    // resolution is the side tab -> build now, play lazily on first open.
+    buildResChips(); buildBench(); resEls.run.addEventListener('click', playRes);
+    renderAgentDojo();
+    document.getElementById('lede').textContent = LEDE.enforcement;
+    document.getElementById('tab-enforcement').addEventListener('click', ()=>showTab('enforcement'));
+    document.getElementById('tab-resolution').addEventListener('click', ()=>showTab('resolution'));
+  }
+  init();
+})();
+</script>
+</body>
+</html>
