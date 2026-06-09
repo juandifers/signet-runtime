@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .base import AuthorizationResult, Authorizer
 from .. import chain
@@ -76,8 +76,7 @@ class GitHubRailBridge(Authorizer):
 
     def __init__(self, verifier, enforcer_verify_key: str,
                  github_rail: Optional[GitHubRail] = None):
-        self._verifier = verifier
-        self._enforcer_vk = enforcer_verify_key
+        super().__init__(verifier, enforcer_verify_key)
         self._rail = github_rail or MockGitHubRail()
 
     @staticmethod
@@ -98,34 +97,35 @@ class GitHubRailBridge(Authorizer):
                 and x.recipient.startswith(x.action + ":")
                 and "@" in x.recipient)
 
-    def authorize(self, token: ExecutionToken,
-                  req: ExecutionRequest) -> AuthorizationResult:
-        # 1. The authorizer refuses to act unless the enforcer token is valid. FIRST.
-        if not self._verifier.verify_token(token, self._enforcer_vk):
-            return AuthorizationResult(False, "Enforcer token invalid/expired.", rail=self.rail)
-
-        # 2. Independent re-check: the token is bound to THIS exact transaction, and
-        #    the runtime effect matches the approved Cart (effect_class, recipient
-        #    incl. head_sha, destination_account). Fail closed on any mismatch.
-        head_sha = _parse_head_sha(req.context.recipient)
+    # -- the content hooks; base.Authorizer.authorize owns verify_token + the order --
+    def recheck_against_context(self, token: ExecutionToken,
+                                req: ExecutionRequest) -> Tuple[bool, str]:
+        """Independent re-check (no side effect): the token is bound to THIS exact transaction, and
+        the runtime effect matches the approved Cart (effect_class, recipient incl. head_sha,
+        destination_account). Fail closed on any mismatch."""
         recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
         bound = (recomputed == token.chain_hash
                  and self._well_formed(req)
                  and self._context_matches_cart(req))
-
-        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
         if not bound:
-            # Record a hard failure conclusion bound to the token's chain_hash; the
-            # protected merge does NOT proceed.
-            self._rail.conclude(check_run_id, token.chain_hash, "failure")
-            return AuthorizationResult(
-                False,
-                "Effect/context mismatch vs the approved Cart "
-                "(head_sha/base/path substitution or unbound token).",
-                payment_ref=check_run_id, rail=self.rail)
+            return (False, "Effect/context mismatch vs the approved Cart "
+                           "(head_sha/base/path substitution or unbound token).")
+        return True, "bound to this transaction"
 
-        # 3. Conclude the required Check Run as success -> the protected-branch merge
-        #    gate is satisfied. Only the enforcer can do this.
+    def on_rejected(self, token: ExecutionToken, req: ExecutionRequest, reason: str) -> None:
+        """Preserve the rail-native record: conclude the required Check Run as FAILURE, bound to
+        the token's chain_hash (so the protected merge demonstrably did NOT proceed)."""
+        head_sha = _parse_head_sha(req.context.recipient)
+        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
+        self._rail.conclude(check_run_id, token.chain_hash, "failure")
+
+    def produce_capability(self, token: ExecutionToken,
+                           req: ExecutionRequest) -> AuthorizationResult:
+        """Conclude the required Check Run as success -> the protected-branch merge gate is
+        satisfied. Only the enforcer can do this. Reached ONLY after both guards pass."""
+        head_sha = _parse_head_sha(req.context.recipient)
+        recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
+        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
         try:
             ref = self._rail.conclude(check_run_id, recomputed, "success")
         except PermissionError as e:

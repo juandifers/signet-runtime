@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import hmac
 import uuid
-from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Dict
+from typing import Dict, Tuple
 
 from .base import AuthorizationResult, Authorizer
 from ..models import ExecutionRequest, ExecutionToken
@@ -49,8 +48,7 @@ class MockCredentialBroker(Authorizer):
     def __init__(self, verifier, enforcer_verify_key: str,
                  adapter: MockPaymentAdapter | None = None,
                  broker_secret: bytes = b"enforcer-only-secret"):
-        self._verifier = verifier
-        self._enforcer_vk = enforcer_verify_key
+        super().__init__(verifier, enforcer_verify_key)
         self.adapter = adapter or MockPaymentAdapter()
         self._secret = broker_secret  # the credential-minting key the agent never has
 
@@ -62,11 +60,16 @@ class MockCredentialBroker(Authorizer):
         self.adapter._register(credential_id, chain_hash)
         return credential_id + ":" + mac
 
-    def authorize(self, token: ExecutionToken,
-                  req: ExecutionRequest) -> AuthorizationResult:
-        # The authorizer refuses to act unless the enforcer token is valid.
-        if not self._verifier.verify_token(token, self._enforcer_vk):
-            return AuthorizationResult(False, "Enforcer token invalid/expired.", rail=self.rail)
+    # -- the two content hooks; the base template owns verify_token + the order --
+    def recheck_against_context(self, token: ExecutionToken,
+                                req: ExecutionRequest) -> Tuple[bool, str]:
+        # The mock credential broker is rail-agnostic credential custody: it has no per-rail
+        # effect-vs-context binding to re-check (the kernel already context-bound the token). It
+        # mints ONLY on a valid token, which the template guarantees before this returns.
+        return True, "ok"
+
+    def produce_capability(self, token: ExecutionToken,
+                           req: ExecutionRequest) -> AuthorizationResult:
         credential = self._mint(token.chain_hash)
         credential_id = credential.split(":")[0]
         try:

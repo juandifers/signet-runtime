@@ -31,6 +31,8 @@ from .policy import InMemoryPolicySource
 _R = CONFIGURED_REPO
 CASSETTE_PATH = (Path(__file__).resolve().parents[2]
                  / "tests/fixtures/github_railbridge/role_b_cassette.json")
+SWEEP_CASSETTE_PATH = (Path(__file__).resolve().parents[2]
+                       / "tests/fixtures/github_railbridge/borderline_sweep_cassette.json")
 
 
 # ---- the three recorded scenarios (label, OpenMandate, world) ----
@@ -119,13 +121,56 @@ def _load_dotenv(path=".env") -> None:
         os.environ.setdefault(k, v)
 
 
+def record_borderline_sweep(provider=None, model=None, *, k=5, temperature=0.7) -> int:
+    """Record k samples per borderline-sweep case to SWEEP_CASSETTE_PATH (temperature > 0 so the
+    k samples vary). Each case's k raws are stored under one key (hash of the resolver inputs);
+    CI replays them deterministically. Needs an API key."""
+    from .cassette import SampleCassette, cassette_key
+    from .resolver import (CandidateView, _SYSTEM, _build_user_prompt, _resolve_provider,
+                           make_complete)
+    from .role_b_corpus import build_borderline_sweep
+
+    provider = _resolve_provider(provider)
+    try:
+        complete = make_complete(provider, model, temperature=temperature)
+    except Exception as e:
+        print(f"ERROR: cannot init the {provider} backend: {e}", file=sys.stderr)
+        return 2
+
+    cas = SampleCassette(SWEEP_CASSETTE_PATH, model=model or "(default)", provider=provider,
+                         temperature=temperature)
+    cases = build_borderline_sweep()
+    for case in cases:
+        cands = [CandidateView.from_pr(r) for r in case.world.open_prs.values()]
+        user = _build_user_prompt(case.criterion, cands)
+        raws = [complete(_SYSTEM, user) for _ in range(k)]
+        cas.put_samples(case.criterion, cands, raws, label=case.id,
+                        meta={"base": case.base, "level": case.level, "variant": case.variant})
+        esc = sum(1 for r in raws if "91001" in r or "[]" in r.replace(" ", ""))
+        print(f"[{case.id}] recorded {len(raws)} samples "
+              f"(rough deviate/escalate-ish hint: {esc}/{k})")
+    cas.save()
+    print(f"\nWrote {SWEEP_CASSETTE_PATH} ({provider}/{model or 'default'}, k={k}, "
+          f"temp={temperature}, {len(cases)} cases).")
+    return 0
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Record the Role-B replay cassette.")
+    ap = argparse.ArgumentParser(description="Record the Role-B replay cassette(s).")
     ap.add_argument("--record", action="store_true",
-                    help="call the live model and (over)write the cassette (needs an API key)")
+                    help="call the live model and (over)write the 3-scenario cassette (needs a key)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="record the borderline-relevance sweep cassette (k samples/case, needs a key)")
     ap.add_argument("--provider", choices=("openai", "anthropic"), default=None)
     ap.add_argument("--model", default=None)
+    ap.add_argument("--k", type=int, default=5, help="samples per case for the sweep")
+    ap.add_argument("--temperature", type=float, default=0.7, help="temperature for the sweep")
     args = ap.parse_args(argv)
+
+    if args.sweep:
+        _load_dotenv()
+        return record_borderline_sweep(args.provider, args.model, k=args.k,
+                                       temperature=args.temperature)
 
     from .cassette import Cassette, CassetteResolver
     if not args.record:

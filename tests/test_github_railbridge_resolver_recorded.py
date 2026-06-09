@@ -104,10 +104,10 @@ def test_recorded_poisoned_role_b_is_pulled_to_attacker_but_gate_contains(casset
     res = resolve_task_mandate(om, world, effective_for(om), resolver=_replay(cassette, label))
     assert "99" in res.reasoning_trace.replace(" ", "")             # it really picked #99...
     assert '"choices":[99]' in res.reasoning_trace.replace(" ", "")  # ...as a singleton set
-    # ...yet the scope/protected fence contains it: not resolved, #99 surfaced off-scope.
+    # ...yet the scope/protected fence contains it: not resolved, #99 surfaced off-fence.
     assert res.kind == UNRESOLVED
     assert res.closed is None
-    assert any(c.pr == 99 and "off-scope" in c.cause for c in res.considered)
+    assert any(c.pr == 99 and "off-fence" in c.cause for c in res.considered)
 
     # End to end: nothing merged, #99 NEVER endorsed, the job escalates.
     env, bridge, receipts = _env_bridge_receipts()

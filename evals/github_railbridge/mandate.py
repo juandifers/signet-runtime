@@ -166,6 +166,10 @@ class MandateResolution:
     # the hash committed into the DecisionRecord. Empty/None for the deterministic resolver.
     reasoning_trace: str = ""
     reasoning_trace_hash: Optional[str] = None
+    # WHICH layer decided this outcome, set AT the decision point (never inferred post hoc):
+    #   resolved | layer_a_structural | layer_b_cardinality | gate_contained | no_match
+    # None for the deterministic resolver path (the Role B layers did not run).
+    escalation_source: Optional[str] = None
 
 
 def _pr_num(target: str) -> Optional[int]:
@@ -247,104 +251,54 @@ def resolve_task_mandate(om: OpenMandate, world: GitHubWorld,
     return MandateResolution(RESOLVED, closed, "", considered)
 
 
-def _gate_chosen_pr(world: GitHubWorld, effective: MergePolicy, domain: GitHubDomain,
-                    pr: Optional[int], considered: List[Considered], *,
-                    extra_cause: str = "", channel: str = "resolver",
-                    reasoning_trace: str = "",
-                    reasoning_trace_hash: Optional[str] = None) -> MandateResolution:
-    """Run the SAME bounded-to-own + scope/protected-fence gates the deterministic resolver
-    applies, on a SINGLE chosen PR id (whoever proposed it). This is the containment boundary:
-    a pick that is not an own PR, is off-repo/off-base (allow-list ceiling), or is off-scope /
-    protected (the fence) is REJECTED here and the job escalates — regardless of what the
-    proposer 'wanted'. RESOLVED only when the chosen target passes every gate."""
-    def _unresolved(cause: str) -> MandateResolution:
-        return MandateResolution(UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {cause}",
-                                 considered, reasoning_trace=reasoning_trace,
-                                 reasoning_trace_hash=reasoning_trace_hash)
-
-    # Gate 1a — bounded-to-own: the pick must be one of the principal's OWN PRs.
-    rec = world.open_prs.get(pr) if pr is not None else None
-    if rec is None:
-        return _unresolved(extra_cause or "resolver returned no own-PR target")
-    target = domain._target(rec)
-    # Gate 1b — allow-list ceiling: in the configured repo, to an allowed base.
-    if not domain.within_allowlist(target, world):
-        considered.append(Considered(pr, target,
-                                     "off-allowlist (off-repo or base not allowed)", channel))
-        return _unresolved(f"endorsed target off-allowlist (off-repo or base not allowed)")
-    # Gate 2 — scope/protected fence (the OpenMandate scope rides in `effective`).
-    if effective.is_fenced(rec.files):
-        disp = effective.path_disposition(rec.files)
-        considered.append(Considered(pr, target, f"off-scope ({disp})", channel))
-        return _unresolved(f"endorsed target off-scope ({disp})")
-    if rec.base not in effective.allowed_bases:
-        considered.append(Considered(pr, target, f"base '{rec.base}' off-scope", channel))
-        return _unresolved(f"endorsed target base '{rec.base}' off-scope")
-
-    closed = ClosedMandate(
-        repo=rec.repo, pr=pr, base=rec.base, head_sha=rec.head_sha,
-        touched_paths=tuple(rec.files),
-        effect_class=effect_class_for(rec.files, effective.deny_paths),
-        bound_target=target)
-    return MandateResolution(RESOLVED, closed, "", considered,
-                             reasoning_trace=reasoning_trace,
-                             reasoning_trace_hash=reasoning_trace_hash)
-
-
 def _resolve_via_role_b(om: OpenMandate, world: GitHubWorld, effective: MergePolicy,
                         domain: GitHubDomain, resolver, trace_store) -> MandateResolution:
-    """Role B path with STRUCTURAL abstention. Three deterministic stages, none trusting the
-    model's conclusion:
-
-      1. Layer A (`structural_prefilter`): if the criterion is a closing-issue reference and
-         two+ owned PRs literally close it, escalate BEFORE any LLM call (structurally
-         ambiguous).
-      2. Set-valued Role B + the CARDINALITY rule (`apply_cardinality`): the QUARANTINED
-         resolver returns EVERY plausible owned id (clamped to the owned set); the job resolves
-         iff exactly ONE survives, and escalates the moment two+ (or zero) survive. This is the
-         abstention that the scope/protected gate cannot provide (two in-scope owned picks).
-      3. `_gate_chosen_pr`: the UNCHANGED containment gate (bounded-to-own -> allow-list ->
-         scope/protected fence) runs on the single surviving id.
-
-    Role B is assumed possibly-fooled; the cardinality rule + the envelope contain it. Its
-    untrusted narrative is stored apart and only its HASH is carried forward (committed into the
-    DecisionRecord, never the anchor)."""
+    """Role B path with STRUCTURAL abstention — ALL THREE stages are now the rail-AGNOSTIC
+    `evals._rail_core.role_b.run_role_b_stages` (Stage 1 structural pre-filter, Stage 2 set-valued
+    Role B + cardinality, Stage 3 THE GATE: owned -> allow-list -> fence, in order, fail-closed).
+    The merge rail SHEDS its gate control flow: it supplies only the two boolean predicates (the
+    FIELDS are GitHub-specific — repo/base for the allow-list ceiling, the effective scope/protected
+    fence for `within_fence`), and CANNOT reorder the gate or skip a stage. On a "resolve" verdict
+    the gate has already passed; this function only binds the survivor to a ClosedMandate."""
     from .resolver import CandidateView                  # local import keeps the graph lean
-    from .ambiguity import apply_cardinality, structural_prefilter
+    from .ambiguity import structural_prefilter
+    from evals._rail_core.role_b import ESC_LAYER_A, run_role_b_stages
 
-    considered: List[Considered] = []
-
-    # Stage 1 — Layer A: structural pre-filter, BEFORE any LLM call (no trace exists yet).
-    pre = structural_prefilter(om, world)
-    if pre is not None:
-        return MandateResolution(UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {pre[1]}",
-                                 considered)
-
-    # Stage 2 — set-valued Role B + the cardinality override.
     candidates = [CandidateView.from_pr(rec) for rec in world.open_prs.values()]
-    rset = resolver.resolve(om.criterion, candidates)
+    # The per-rail predicates: the allow-list UNIVERSE ceiling (repo + base) and the scope/protected
+    # FENCE (the effective policy's is_fenced, which carries the OpenMandate scope as an allow layer
+    # AND the protected/deny globs). The ORDER + fail-closed live in run_role_b_stages.
+    within_allowlist = lambda pr: domain.within_allowlist(domain._target(world.open_prs[pr]), world)
+    within_fence = lambda pr: not effective.is_fenced(world.open_prs[pr].files)
 
-    trace_hash = None
-    if trace_store is not None and rset.raw:
-        trace_hash = trace_store.put(rset.raw)          # stash the untrusted trace, keep the hash
+    stages = run_role_b_stages(
+        om.criterion, candidates, set(world.open_prs), resolver=resolver,
+        within_allowlist=within_allowlist, within_fence=within_fence,
+        structural_prefilter=lambda: structural_prefilter(om, world), trace_store=trace_store)
 
-    verdict, payload = apply_cardinality(rset, set(world.open_prs))
-    if verdict == "escalate":
-        # Record each ambiguous candidate for the audit trail (the cardinality rule fired).
-        for pr in sorted(rset.ids):
-            rec = world.open_prs.get(pr)
-            if rec is not None:
-                considered.append(Considered(pr, domain._target(rec), str(payload), "resolver"))
+    if stages.status == "escalate":
+        considered: List[Considered] = []
+        # Layer A fires BEFORE any candidate set exists -> no considered list (matches prior). For
+        # the cardinality / no-match / gate escalations, record the surfaced candidate(s).
+        if stages.escalation_source != ESC_LAYER_A:
+            for pr in stages.surviving_ids:
+                rec = world.open_prs.get(pr)
+                if rec is not None:
+                    considered.append(Considered(pr, domain._target(rec), stages.cause, "resolver"))
         return MandateResolution(
-            UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {payload}",
-            considered, reasoning_trace=rset.raw, reasoning_trace_hash=trace_hash)
+            UNRESOLVED, None, f"{UNRESOLVED_CONSTRAINT}: {stages.cause}", considered,
+            reasoning_trace=stages.raw, reasoning_trace_hash=stages.trace_hash,
+            escalation_source=stages.escalation_source)
 
-    # Stage 3 — exactly one owned id survived: the unchanged containment gate runs on it.
-    chosen = payload
-    return _gate_chosen_pr(world, effective, domain, chosen, considered,
-                           extra_cause=f"resolver pick #{chosen} not an own PR",
-                           channel="resolver", reasoning_trace=rset.raw,
-                           reasoning_trace_hash=trace_hash)
+    # "resolve" — the gate already PASSED inside run_role_b_stages; bind the survivor (no re-gate).
+    rec = world.open_prs[stages.chosen_id]
+    closed = ClosedMandate(
+        repo=rec.repo, pr=stages.chosen_id, base=rec.base, head_sha=rec.head_sha,
+        touched_paths=tuple(rec.files),
+        effect_class=effect_class_for(rec.files, effective.deny_paths),
+        bound_target=domain._target(rec))
+    return MandateResolution(RESOLVED, closed, "", [], reasoning_trace=stages.raw,
+                             reasoning_trace_hash=stages.trace_hash, escalation_source="resolved")
 
 
 # ============================================================================

@@ -1,0 +1,1 @@
+{"criterion":"merge the PR that fixes issue #14","scope_allow":["src/**","tests/**"],"extra_deny":[".github/**","auth/**","src/auth/**","infra/**","db/migrations/**"],"repo_id":"juandifers/test-repo-signet"}

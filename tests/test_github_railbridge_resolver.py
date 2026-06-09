@@ -109,8 +109,9 @@ def test_adversarial_resolver_always_picks_attacker_is_contained():
     res = resolve_task_mandate(om, world, eff, resolver=adversary)
     assert res.kind == UNRESOLVED
     assert res.closed is None
-    assert "off-scope" in res.cause
-    assert any(c.pr == 99 and "off-scope" in c.cause for c in res.considered)
+    # The shared Stage-3 gate names the rejecting stage: #99 touches a protected path -> off-fence.
+    assert "off-fence" in res.cause
+    assert any(c.pr == 99 and "off-fence" in c.cause for c in res.considered)
 
     # End to end: the job escalates (REVIEW), nothing is merged, no approved receipt for #99.
     job = run_open_mandate(env, source, bridge, receipts, world, repo_id=_R, open_mandate=om,
