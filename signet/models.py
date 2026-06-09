@@ -150,8 +150,16 @@ class Receipt(BaseModel):
     rail: str
     timestamp: datetime
     prev_receipt_hash: Optional[str] = None
+    # An optional backlink to the structured, off-chain DecisionRecord (the rail-side audit
+    # record). Additive: when None it is EXCLUDED from the hashing payload, so receipts that
+    # never set it hash byte-identically to before this field existed. When set, it rides in
+    # the hashing payload and is therefore signed-over (tamper-evident) like any other field.
+    decision_record_hash: Optional[str] = None
     receipt_hash: Optional[str] = None
     signature: Optional[str] = None
 
     def hashing_payload(self) -> dict:
-        return self.model_dump(mode="json", exclude={"receipt_hash", "signature"})
+        exclude = {"receipt_hash", "signature"}
+        if self.decision_record_hash is None:
+            exclude.add("decision_record_hash")   # additive: legacy receipts hash identically
+        return self.model_dump(mode="json", exclude=exclude)

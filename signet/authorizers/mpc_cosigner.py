@@ -202,10 +202,18 @@ class MPCThresholdCosigner(Authorizer):
 
     def authorize(self, token: ExecutionToken,
                   req: ExecutionRequest) -> AuthorizationResult:
-        # Producing a signature needs the agent's secret share, which this
-        # enforcer-side authorizer deliberately does not hold (that is the point:
-        # neither side can sign alone). Drive the interactive path explicitly via
-        # agent_commit -> cosign -> combine_scalars, or the demo helper.
+        # Producing a signature needs the agent's secret share, which this enforcer-side authorizer
+        # deliberately does not hold (neither side can sign alone). This rail OVERRIDES the base
+        # template; its real entry is the interactive cosign path. Bringing cosign under an
+        # analogous template is a separate, flagged pass (same convention gap, by design).
         raise NotImplementedError(
             "Use agent_commit/cosign/combine_scalars explicitly, or the demo helper."
         )
+
+    # The base ABC now declares these hooks; the cosign path does not use the single-arg template,
+    # so they are stubs that point at `cosign`. (Implemented only to keep the class instantiable.)
+    def recheck_against_context(self, token, req):
+        raise NotImplementedError("MPC uses the interactive agent_commit/cosign/combine path.")
+
+    def produce_capability(self, token, req):
+        raise NotImplementedError("MPC uses the interactive agent_commit/cosign/combine path.")

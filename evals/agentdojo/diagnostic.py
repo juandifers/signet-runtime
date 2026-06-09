@@ -490,11 +490,16 @@ def build_effect_rows(domain, modes, model, provider, suite, user_task_ids):
 
 
 def _classify_effect(mode, pred, gt_eff, gt_key, task_keys, env, domain, sp):
-    from .effects import ENDORSE, resolve_effect_predicate
+    from evals.effect_core import ENDORSE, resolve_effect_predicate
     ec = gt_eff.effect_class
     cap = sp.cap_cents
-    lit_key = (_effect_key_norm(ec, pred.target_literal)
-               if (pred and pred.target_literal) else None)
+    # Canonicalize an instruction-NAMED literal over env (binding-only) before keying
+    # it. The default hook is identity, so non-overriding domains are byte-identical;
+    # a domain whose bound target embeds a runtime fact (e.g. GitHub's head_sha) can now
+    # have a literally-named target authorized under STRICT/POLICY.
+    lit = (domain.canonicalize_literal(ec, pred.target_literal, env)
+           if (pred and pred.target_literal) else None)
+    lit_key = _effect_key_norm(ec, lit) if lit else None
 
     if mode == MODE_STRICT:
         ok = lit_key is not None and lit_key == gt_key

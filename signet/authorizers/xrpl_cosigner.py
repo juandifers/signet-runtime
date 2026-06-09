@@ -81,10 +81,21 @@ class XRPLCosigner(Authorizer):
 
     def authorize(self, token: ExecutionToken,
                   req: ExecutionRequest) -> AuthorizationResult:
-        # Full offline crypto path. (agent_wallet supplied via req-less helper in demo.)
+        # The 2-of-2 co-sign path needs the agent's pre-signed tx, so this rail deliberately
+        # OVERRIDES the base template (its real entry point is `cosign(tx, agent_signed, ...)`,
+        # a different signature). Bringing cosign under an analogous template is a separate pass
+        # (it has the SAME verify_token + re-check convention gap, by design noted, not yet closed).
         raise NotImplementedError(
             "Use build_payment/agent_presign/cosign explicitly, or the demo helper."
         )
+
+    # The base ABC now declares these hooks; the cosign path does not use the single-arg template,
+    # so they are stubs that point at `cosign`. (Implemented only to keep the class instantiable.)
+    def recheck_against_context(self, token, req):
+        raise NotImplementedError("XRPL uses cosign(tx, agent_signed, token, req).")
+
+    def produce_capability(self, token, req):
+        raise NotImplementedError("XRPL uses cosign(tx, agent_signed, token, req).")
 
 
 def submit_to_testnet(combined: Payment,
