@@ -12,9 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from evals._rail_core.policy_spec import evaluate_fence
 from .domain import (ALLOWED_RESOURCE_TYPES, CONFIGURED_ACCOUNTS, CONFIGURED_CLUSTERS,
                      DEFAULT_BLAST_CAP, DEFAULT_DESTROY_CAP, EFFECT_INFRA_APPLY,
-                     EFFECT_INFRA_APPLY_PROTECTED, PROTECTED_RESOURCE_TYPES)
+                     EFFECT_INFRA_APPLY_PROTECTED, PROTECTED_RESOURCE_TYPES,
+                     infra_project_for_policy, infra_spec_for_policy)
+
+# Maps the shared evaluator's disposition (the first-violated fence attr) back to the rail's legacy
+# telemetry vocabulary (kept stable for the corpus tests).
+_DISPOSITION = {"": "in-fence", "protected_type": "protected-type",
+                "blast_radius": "blast-over-cap", "destroy_count": "destroy-over-cap"}
 
 # ---- tiers (the disposition a fenced effect gets) — identical vocabulary to the other rails ----
 TIER_AUTO = "auto"
@@ -66,21 +73,16 @@ class InfraPolicy:
             base = stricter(base, TIER_COSIGN)
         return base
 
-    # -- the fence (the CONJUNCTION; set-membership AND two quantitative caps) --
+    # -- the fence (the CONJUNCTION; set-membership AND two quantitative caps) — now DATA, evaluated
+    #    by the ONE shared evaluator over the declared CandidateSchema/PolicySpec. No fence code. --
     def change_disposition(self, plan) -> str:
-        prot = {t.lower() for t in self.protected_resource_types}
-        if any(str(t).lower() in prot for t in getattr(plan, "resource_types", frozenset())):
-            return "protected-type"
-        if int(getattr(plan, "blast_radius", 0)) > int(self.blast_cap):
-            return "blast-over-cap"
-        if int(getattr(plan, "destroy_count", 0)) > int(self.destroy_cap):
-            return "destroy-over-cap"
-        return "in-fence"
+        _, disp = evaluate_fence(infra_project_for_policy(plan, self), infra_spec_for_policy(self))
+        return _DISPOSITION[disp]
 
     def is_fenced(self, plan) -> bool:
         """True if the change-set touches a protected resource type, exceeds the blast cap, or
         exceeds the destroy cap (-> requires review)."""
-        return self.change_disposition(plan) != "in-fence"
+        return not evaluate_fence(infra_project_for_policy(plan, self), infra_spec_for_policy(self))[0]
 
     # -- monotonic narrowing: a task may only ADD restrictions --
     def intersect(self, task: Optional["InfraPolicy"]) -> "InfraPolicy":

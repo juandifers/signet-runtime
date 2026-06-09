@@ -21,8 +21,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
+from evals._rail_core.policy_spec import evaluate_fence
 from .domain import (ALLOWED_BASES, CONFIGURED_REPO, EFFECT_MERGE,
-                     EFFECT_MERGE_PROTECTED, PROTECTED_GLOBS)
+                     EFFECT_MERGE_PROTECTED, PROTECTED_GLOBS, github_fence_attrs,
+                     github_spec_for_policy)
 
 # ---- tiers (the disposition a fenced effect gets) ----
 TIER_AUTO = "auto"        # the agent may merge autonomously (kernel still context-binds)
@@ -107,8 +109,10 @@ class MergePolicy:
         return "in-fence"
 
     def is_fenced(self, touched_paths) -> bool:
-        """True if ANY touched path is denied or outside the allow fence (-> protected)."""
-        return self.path_disposition(touched_paths) != "in-fence"
+        """True if ANY touched path is denied or outside the allow fence (-> protected). Now DATA:
+        the shared evaluator over the declared fence (protected_path==False AND in_scope==True)."""
+        return not evaluate_fence(github_fence_attrs(touched_paths, self),
+                                  github_spec_for_policy(self))[0]
 
     # -- monotonic narrowing: a task may only ADD restrictions --
     def intersect(self, task: Optional["MergePolicy"]) -> "MergePolicy":

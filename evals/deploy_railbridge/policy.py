@@ -11,8 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from evals._rail_core.policy_spec import evaluate_fence
 from .domain import (ALLOWED_ENVIRONMENTS, CONFIGURED_SERVICES, EFFECT_DEPLOY,
-                     EFFECT_DEPLOY_PROTECTED, PROTECTED_ENVIRONMENTS)
+                     EFFECT_DEPLOY_PROTECTED, PROTECTED_ENVIRONMENTS,
+                     deploy_project_for_policy, deploy_spec_for_policy)
 
 # ---- tiers (the disposition a fenced effect gets) — identical vocabulary to the merge rail ----
 TIER_AUTO = "auto"
@@ -71,8 +73,10 @@ class DeployPolicy:
 
     def is_fenced(self, build) -> bool:
         """True if the build's target environment is protected / out-of-allow, or its provenance
-        is insufficient (-> requires review)."""
-        return self.env_disposition(build) != "in-fence"
+        is insufficient (-> requires review). Now DATA: the shared evaluator over the declared
+        fence (protected_env==False AND environment∈allowed AND provenance_ok==True)."""
+        return not evaluate_fence(deploy_project_for_policy(build, self),
+                                  deploy_spec_for_policy(self))[0]
 
     # -- monotonic narrowing: a task may only ADD restrictions --
     def intersect(self, task: Optional["DeployPolicy"]) -> "DeployPolicy":

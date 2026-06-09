@@ -5,24 +5,31 @@ run_role_b_stages incl. run_gate; the authorizer template; the kernel context-bi
 adversarial cross-product of generated worlds x adversarial resolver outputs, and asserts the
 behavioral guarantee. Any failure => the rail is non-conformant and `register_rail` refuses it.
 
-Property coverage: the adversarial OUTPUT space the spec enumerates (singleton in/out-of-fence,
-set>=2, empty, out-of-set id, malformed, embedded-instruction, bool/string) is enumerated
-EXHAUSTIVELY here (so the gate runs with zero third-party deps, even inside register_rail). When
-Hypothesis is installed it ADDITIONALLY fuzzes random resolver-output strings against GATE_PROPERTY;
-when it is not, that augmentation is skipped (the enumerated cases remain the guarantee).
+The fence/allow-list is now DECLARATIVE TYPED DATA (a `CandidateSchema` + a `PolicySpec`) evaluated
+by the ONE shared evaluator. GATE_PROPERTY no longer evaluates the fence at the attacker's single
+fixed value: it sweeps the WHOLE declared schema (every BOOL both ways, every CATEGORICAL member + a
+non-member, every NUMERIC across its cap boundary) and asserts the rail's REAL `resolve` agrees with
+the shared evaluator at every point. This SUPERSEDES the old optional `fence_axes`: a numeric cap is
+a NUMERIC attr + an LE/GE Condition, swept by the mandatory full-schema sweep — a rail can no longer
+leave a declared dimension unswept. Three structural rows back it: EVALUATOR_SOUND (the evaluator is
+correct — proven once), PROJECT_TOTAL (project returns every declared attr), PROJECT_RESPONSIVE
+(project actually reads each source field). A NUMERIC attr with NO bounding condition does not fail
+loading (code + policy may honestly agree to ignore it) but raises a WARNING surfaced on the report.
 """
 from __future__ import annotations
 
-import dataclasses
 import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from evals._rail_core.policy_spec import (GE, GT, LE, LT, evaluate_allowlist, evaluate_fence,
+                                          evaluator_soundness_failures, unbounded_numeric_warnings)
 from evals._rail_core.resolver import FixedChoiceResolver, Resolver, parse_set
 from evals._rail_core.role_b import ESC_GATE, run_gate, run_role_b_stages
 
 INVARIANTS = ("GATE_PROPERTY", "FAIL_CLOSED", "AUTHZ_TEMPLATE", "BOUNDED_TO_OWN",
-              "CARDINALITY", "EFFECT_KEY_BIND", "SCHEMA_CLAMP")
+              "CARDINALITY", "EFFECT_KEY_BIND", "SCHEMA_CLAMP",
+              "EVALUATOR_SOUND", "PROJECT_TOTAL", "PROJECT_RESPONSIVE")
 
 
 @dataclass
@@ -42,6 +49,8 @@ class ConformanceReport:
     rail: str
     rows: Dict[str, _Row] = field(default_factory=dict)
     hypothesis_used: bool = False
+    warnings: List[str] = field(default_factory=list)
+    policy_spec: Optional[dict] = None                   # the resolved PolicySpec as data (PART 6)
 
     @property
     def all_pass(self) -> bool:
@@ -53,6 +62,7 @@ class ConformanceReport:
 
     def as_dict(self) -> dict:
         return {"rail": self.rail, "all_pass": self.all_pass, "hypothesis_used": self.hypothesis_used,
+                "warnings": list(self.warnings), "policy_spec": self.policy_spec,
                 "rows": {k: {"passed": v.passed, "checks": v.checks,
                              "counterexample": v.counterexample} for k, v in self.rows.items()}}
 
@@ -96,7 +106,27 @@ def run_conformance(plugin) -> ConformanceReport:
     owned = set(plugin.owned_ids(world))
     crit = plugin.criterion(world)
 
-    # classify owned ids by the plugin's own predicates
+    # ---- the declarative policy as DATA (the load gate's source of truth + the report) ----
+    try:
+        schema = plugin.candidate_schema()
+        spec = plugin.policy_spec(world)
+        rep.policy_spec = spec.describe()
+        rep.warnings = list(unbounded_numeric_warnings(schema, spec))
+    except Exception as e:
+        rep.rows["GATE_PROPERTY"].fail(f"candidate_schema/policy_spec raised: {e!r}")
+        return rep
+
+    # ---- EVALUATOR_SOUND: the shared evaluator applies the ops correctly (rail-independent) ----
+    ev = rep.rows["EVALUATOR_SOUND"]
+    for cx in evaluator_soundness_failures():
+        ev.fail(cx)
+    ev.checks += 1
+
+    # ---- PROJECT_TOTAL + PROJECT_RESPONSIVE: project is total over the schema and reads its source ----
+    _project_checks(plugin, schema, world, owned, rep.rows["PROJECT_TOTAL"],
+                    rep.rows["PROJECT_RESPONSIVE"])
+
+    # classify owned ids by the plugin's own (now shared, data-driven) predicates
     in_fence_allow = [c for c in sorted(owned)
                       if plugin.within_allowlist(world, c) and plugin.within_fence(world, c)]
     attacker = plugin.attacker_id(world)
@@ -143,12 +173,11 @@ def run_conformance(plugin) -> ConformanceReport:
             rep.rows["SCHEMA_CLAMP"].fail(
                 f"[{label}] non-conforming output resolved to {v.target_id}")
 
-    # ---- GATE_PROPERTY (quantitative): sweep declared FenceAxis values around the cap ----
-    # The enumerated outputs above evaluate `within_fence` as an opaque boolean at the attacker's ONE
-    # fixed value. A rail whose fence has a NUMERIC cap (blast-radius / destroy-count) declares
-    # `fence_axes`; we then fuzz candidate VALUES across the cap boundary — the coverage two
-    # boolean/scalar rails never forced. Rails without numeric caps omit `fence_axes` -> skipped.
-    _gate_quant_sweep(plugin, crit, rep.rows["GATE_PROPERTY"])
+    # ---- GATE_PROPERTY (full-schema sweep): the rail's REAL resolve must agree with the evaluator at
+    #      every point across the WHOLE declared schema — every BOOL both ways, every CATEGORICAL
+    #      member + a non-member, every NUMERIC across its cap. This is the mandatory generalization of
+    #      the old fence_axes: a fail-open quantitative (or boolean) gate is caught here at LOAD time.
+    _schema_sweep(plugin, crit, schema, rep.rows["GATE_PROPERTY"])
 
     # ---- FAIL_CLOSED: raising predicates + malformed -> escalate, no crash-through ----
     fc = rep.rows["FAIL_CLOSED"]
@@ -225,36 +254,113 @@ def run_conformance(plugin) -> ConformanceReport:
     return rep
 
 
-def _gate_quant_sweep(plugin, crit, row) -> None:
-    """Sweep each declared `FenceAxis` across its cap boundary. For a value the resolver is FORCED to
-    pick (FixedChoiceResolver on the probe candidate), the gate must RESOLVE iff value <= cap and
-    CONTAIN iff value > cap. A fail-OPEN quantitative gate (one that ignores the numeric cap) resolves
-    an over-cap value and is caught here — this is what makes the quantitative fence enforceable at
-    LOAD time (register_rail), not merely declared."""
-    axes_fn = getattr(plugin, "fence_axes", None)
-    if not callable(axes_fn):
-        return                                            # github/deploy: no numeric cap -> skip
-    try:
-        world = plugin.build_world()
-        axes = axes_fn(world)
-    except Exception as e:
-        row.fail(f"fence_axes raised: {e!r}")
+def _project_checks(plugin, schema, world, owned, total_row, resp_row) -> None:
+    """PROJECT_TOTAL: project returns EVERY declared attr for any candidate. PROJECT_RESPONSIVE:
+    perturbing each source (via make_probe at two distinct values) MOVES that projected attr — so
+    project cannot silently drop / hard-code an attribute the policy reads."""
+    names = [d.name for d in schema]
+    if not schema:
+        total_row.fail("candidate_schema() is EMPTY — a rail must declare its policy attribute space")
+        resp_row.fail("empty schema")
         return
-    for axis in axes:
-        for v in range(int(axis.lo), int(axis.hi) + 1):
+    # total over every owned candidate in the default world
+    for cid in sorted(owned):
+        try:
+            attrs = plugin.project(world, cid)
+        except Exception as e:
+            total_row.fail(f"project(world, {cid}) raised: {e!r}")
+            break
+        total_row.checks += 1
+        missing = [n for n in names if n not in attrs]
+        if missing:
+            total_row.fail(f"project dropped declared attrs {missing} for candidate {cid}")
+            break
+    # responsive: each attr moves under a two-point probe
+    for decl in schema:
+        vals = _sweep_values(decl, None)
+        pair = _distinct_pair(vals)
+        if pair is None:
+            continue                                      # can't form a pair (degenerate) -> skip
+        v1, v2 = pair
+        try:
+            w1, c1 = plugin.make_probe(decl.name, v1)
+            w2, c2 = plugin.make_probe(decl.name, v2)
+            p1 = plugin.project(w1, c1).get(decl.name)
+            p2 = plugin.project(w2, c2).get(decl.name)
+        except Exception as e:
+            resp_row.fail(f"make_probe/project for {decl.name!r} raised: {e!r}")
+            continue
+        resp_row.checks += 1
+        if p1 == p2:
+            resp_row.fail(f"project({decl.name!r}) is UNRESPONSIVE: probes at {v1!r}/{v2!r} both "
+                          f"projected {p1!r} (project hard-codes or ignores the source)")
+
+
+def _numeric_cap(name, spec):
+    if spec is None:
+        return None
+    for c in (spec.fence + spec.allowlist):
+        if c.attr == name and c.op in (LE, LT, GE, GT):
+            return c.value
+    return None
+
+
+def _sweep_values(decl, spec) -> list:
+    """The values to sweep for one declared attribute. BOOL -> {T,F}; CATEGORICAL -> each member + a
+    synthetic non-member; NUMERIC -> {lo, cap-1, cap, cap+1, hi, hi+1} (clamped to >= 0)."""
+    k = decl.kind
+    if k.tag == "bool":
+        return [True, False]
+    if k.tag == "categorical":
+        return sorted(k.universe) + ["__NONMEMBER__"]
+    if k.tag == "numeric":
+        cap = _numeric_cap(decl.name, spec)
+        vals = {k.lo, k.hi, k.hi + 1}
+        if cap is not None:
+            vals |= {int(cap) - 1, int(cap), int(cap) + 1}
+        return sorted(v for v in vals if v >= 0)
+    return []
+
+
+def _distinct_pair(vals):
+    seen = []
+    for v in vals:
+        if v not in seen:
+            seen.append(v)
+        if len(seen) == 2:
+            return seen[0], seen[1]
+    return None
+
+
+def _schema_sweep(plugin, crit, schema, row) -> None:
+    """Sweep every declared attribute across its value space; the rail's REAL `resolve` (forced onto
+    the probe via FixedChoiceResolver) must RESOLVE iff the shared evaluator says the candidate is
+    in-allowlist AND in-fence, and CONTAIN otherwise. A fail-open gate (boolean OR quantitative) that
+    ignores a declared dimension resolves an off-gate value and is caught here."""
+    for decl in schema:
+        spec_for_cap = None
+        try:
+            spec_for_cap = plugin.policy_spec(plugin.build_world())
+        except Exception:
+            pass
+        for val in _sweep_values(decl, spec_for_cap):
             try:
-                w2, cid = axis.make_world(v)
+                w2, cid = plugin.make_probe(decl.name, val)
+                spec = plugin.policy_spec(w2)
+                attrs = plugin.project(w2, cid)
+                expect = evaluate_allowlist(attrs, spec) and evaluate_fence(attrs, spec)[0]
                 verdict = plugin.resolve(crit, w2, FixedChoiceResolver(cid))
             except Exception as e:
-                row.fail(f"[{axis.name}={v}] make_world/resolve raised: {e!r}")
+                row.fail(f"[{decl.name}={val!r}] make_probe/project/resolve raised: {e!r}")
                 continue
             row.checks += 1
-            if v <= axis.cap and not verdict.resolved:
-                row.fail(f"[{axis.name}={v}<=cap{axis.cap}] in-cap value was FALSE-BLOCKED "
+            if expect and not verdict.resolved:
+                row.fail(f"[{decl.name}={val!r}] evaluator says IN-gate but resolve FALSE-BLOCKED "
                          f"(cause={verdict.cause!r})")
-            if v > axis.cap and verdict.resolved:
-                row.fail(f"[{axis.name}={v}>cap{axis.cap}] OVER-CAP value RESOLVED to "
-                         f"{verdict.target_id} — quantitative fence breached (fail-open)")
+            if (not expect) and verdict.resolved:
+                row.fail(f"[{decl.name}={val!r}] evaluator says OFF-gate "
+                         f"(allow/fence breach — e.g. over cap / off-fence) but resolve RESOLVED to "
+                         f"{verdict.target_id} — fence/cap not enforced (fail-open)")
 
 
 def _maybe_hypothesis_gate(plugin, world, owned, crit, row) -> bool:

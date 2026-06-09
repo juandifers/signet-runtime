@@ -10,9 +10,11 @@ to "any rail plugin."
 A non-conformant rail PHYSICALLY cannot load: the platform refuses a weak gate rather than trusting
 the author. Red-team is deepening, not a load blocker.
 """
-from .protocol import (ConformanceError, EffectKeyProbe, FenceAxis, RailPlugin, TokenProbe, Verdict)
+from .protocol import (ConformanceError, DeclarativeRailPlugin, EffectKeyProbe, RailPlugin,
+                       TokenProbe, Verdict)
 from .battery import ConformanceReport, run_conformance
 from .register import CertifiedRail, register_rail
 
-__all__ = ["RailPlugin", "Verdict", "EffectKeyProbe", "FenceAxis", "TokenProbe", "ConformanceError",
-           "run_conformance", "ConformanceReport", "register_rail", "CertifiedRail"]
+__all__ = ["RailPlugin", "DeclarativeRailPlugin", "Verdict", "EffectKeyProbe", "TokenProbe",
+           "ConformanceError", "run_conformance", "ConformanceReport", "register_rail",
+           "CertifiedRail"]

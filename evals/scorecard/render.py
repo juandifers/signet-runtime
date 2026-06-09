@@ -83,10 +83,28 @@ def render_markdown(report: dict, deltas: dict) -> str:
     L.append(f"**Replay containment** — {rc.get('contained_pct')}% across {rc.get('fooled')} "
              f"fooled / {rc.get('samples')} replayed samples.")
     conf = m.get("conformance", {})
-    if conf:
+    conf_rails = {k: v for k, v in conf.items() if isinstance(v, dict)} if isinstance(conf, dict) else {}
+    if conf_rails:
+        n_inv = max((len(r.get("rows", {})) for r in conf_rails.values()), default=0)
         parts = [f"{name}={'✅' if r.get('all_pass') else '❌'}"
-                 f"{'(hyp)' if r.get('hypothesis_used') else ''}" for name, r in conf.items()]
-        L.append(f"**Rail conformance** — {'  '.join(parts)} (offline battery, 7 invariants/rail).")
+                 f"{'(hyp)' if r.get('hypothesis_used') else ''}" for name, r in conf_rails.items()]
+        L.append(f"**Rail conformance** — {'  '.join(parts)} (offline battery, {n_inv} "
+                 "invariants/rail; the fence is declarative typed DATA).")
+        # ---- the resolved PolicySpec per rail, as reviewable data + any warnings (PART 6) ----
+        L.append("")
+        L.append("<details><summary>resolved policy (data — the fence as conditions)</summary>")
+        L.append("")
+        for name, r in conf_rails.items():
+            ps = r.get("policy_spec")
+            if not ps:
+                continue
+            L.append(f"- **{name}**")
+            L.append(f"    - allow-list: {', '.join(ps.get('allowlist', [])) or '—'}")
+            L.append(f"    - fence: {', '.join(ps.get('fence', [])) or '—'}")
+            for w in r.get("warnings", []):
+                L.append(f"    - ⚠️ {w}")
+        L.append("")
+        L.append("</details>")
     rt = m.get("red_team", {})
     if rt:
         parts = [f"{k}: breakout={v['breakout_rate']} degradation={v['degradation_rate']}"
@@ -149,5 +167,14 @@ def render_markdown(report: dict, deltas: dict) -> str:
                 L.append(f"| {d['metric']} | {d['from']} | {d['to']} | {d['direction']} {d['delta']} |")
         else:
             L.append("- No measurement drift (or no comparable numerics).")
+        L.append("")
+        pc = deltas.get("policy_changes", [])
+        if pc:
+            L.append("**Policy (PolicySpec) changes:**")
+            for c in pc:
+                flag = "🚨 " if c["kind"] in ("removed", "bound-changed") and c["layer"] == "fence" else ""
+                L.append(f"- {flag}{c['detail']}")
+        else:
+            L.append("- No PolicySpec changes (the declared fence is unchanged).")
     L.append("")
     return "\n".join(L) + "\n"

@@ -1271,3 +1271,55 @@ skips without a cassette): poisoned-contained + co_equal-escalate; raws persiste
 **0 core-kernel edits**; full suite **175 passed / 4 skipped**; offline-by-default; mock gate only.
 OUT OF SCOPE held: no real terraform/k8s/cloud apply; no 8th (prefilter) invariant; no SDK packaging;
 no cross-vendor models; no new transparency features.
+
+# PART VIII — the fence becomes DATA, not code (`evals/_rail_core/policy_spec.py`)
+
+## 28. Superseding `fence_axes`: a MANDATORY, TYPED, declarative policy
+
+§27 added the OPTIONAL `fence_axes` so the battery could sweep a numeric cap. That was a patch on a
+symptom: the real gap was that the fence was per-rail CODE the author could (a) make read an
+undeclared attribute, (b) write to fail open, or (c) leave a dimension unswept. This step removes the
+class of gap by making the schema + policy **mandatory, typed DATA** evaluated by ONE shared
+function. `fence_axes` is **deleted**; a numeric cap is now a `NUMERIC` attribute + an `LE`/`GE`
+`Condition`, swept by the mandatory full-schema sweep.
+
+**The grammar (`policy_spec.py`).** `AttrKind` = `BOOL | CATEGORICAL(universe) | NUMERIC(lo,hi)`;
+`AttrDecl(name, kind, provenance∈{OWN,UNTRUSTED})`; `CandidateSchema` = the tuple of every attribute
+the policy may read. `Op` = `IN_SET|NOT_IN_SET|LE|GE|LT|GT|EQ`; `Condition(attr, op, value)`;
+`PolicySpec(allowlist, fence)`. `evaluate_allowlist` / `evaluate_fence` are the **only** code that
+decides allow-list / fence — proven once (`EVALUATOR_SOUND`), rail-independent. `IN_SET`/`NOT_IN_SET`
+are set-aware (subset / disjoint for a set-valued attr), so "no protected type" / "types within the
+universe" are DATA, not code.
+
+**Contract (mandatory by construction).** `RailPlugin` now REQUIRES `candidate_schema()`,
+`policy_spec(world)`, `project(world, cid)`, `make_probe(attr, value)`. `within_allowlist` /
+`within_fence` are SHARED + non-overridable on `DeclarativeRailPlugin` (= `evaluate_*(project, spec)`)
+— **a rail ships no fence code and can decide only over attributes it declared.** `register_rail`
+refuses (ConformanceError) a rail with an empty schema, a missing declarative method, or — the key
+provenance gap, closed for free — **a fence/allow-list Condition over an UNTRUSTED (or undeclared)
+attribute**. This is verified: empty-schema, untrusted-attr, and undeclared-attr stubs are all
+refused (`tests/test_declarative_policy.py`).
+
+**Battery.** `GATE_PROPERTY` now sweeps the WHOLE declared schema (every BOOL both ways, every
+CATEGORICAL member + a non-member, every NUMERIC across its cap) and asserts the rail's REAL `resolve`
+agrees with the evaluator at every point — so a rail can no longer leave a declared dimension
+unswept. Three structural rows back it: `EVALUATOR_SOUND`, `PROJECT_TOTAL` (project returns every
+declared attr), `PROJECT_RESPONSIVE` (project actually reads each source). `INVARIANTS` = **10**
+(7 + 3). The fail-open-blast stub is still REFUSED (`[blast_radius=11] … over cap`), and the old
+"withdraw the axis to dodge the sweep" escape is GONE — `test_mandatory_schema_sweep_cannot_be_dodged`.
+
+**The honest residual, surfaced as data.** "Is the DECLARED policy the INTENDED one" is now a cheap
+REVIEW: the scorecard renders each rail's resolved `PolicySpec` (allow-list + fence Conditions) and
+DIFFs it run-over-run — a removed fence Condition or a loosened cap (`blast_radius le 10 → le 20`) is
+an **ALARM** (`POLICY LOOSENED` / `FENCE WEAKENED`), a tightened cap is not. A `NUMERIC` attribute
+declared with NO bounding Condition is a WARNING (not a load failure: code + policy may honestly agree
+to ignore the axis) and is VISIBLE in the rendered spec rather than silently passing
+(`test_unbounded_numeric_axis_is_a_visible_warning_not_a_silent_pass`).
+
+**Behavior-preserving.** github / deploy / infra were refactored so `is_fenced` / `within_allowlist`
+delegate to the shared evaluator over a `CandidateSchema` + `PolicySpec` + `project()`; `intersect()`
+still narrows (caps MIN, sets INTERSECT, protected UNION) — now reflected in the rendered spec. All
+three pass conformance with **byte-identical** decisions on the existing corpora; **0 core-kernel
+edits**; full suite **196 passed / 4 skipped**; offline-by-default. OUT OF SCOPE held: no SDK
+packaging / entry points; no meta-linter beyond the no-bound WARNING; no cross-vendor models; no new
+transparency features.

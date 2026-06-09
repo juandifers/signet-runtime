@@ -377,7 +377,8 @@ def conformance() -> dict:
             rep = run_conformance(p)
             d = rep.as_dict()
             rails[p.name] = {"all_pass": d["all_pass"], "hypothesis_used": d["hypothesis_used"],
-                             "rows": d["rows"],
+                             "rows": d["rows"], "warnings": d["warnings"],
+                             "policy_spec": d["policy_spec"],
                              "failures": {k: v["counterexample"] for k, v in d["rows"].items()
                                           if not v["passed"]}}
         except Exception as e:

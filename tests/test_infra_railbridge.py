@@ -197,9 +197,10 @@ def test_quantitative_sweep_actually_runs():
 # the fail-open blast-radius stub is REFUSED (the quant fence has teeth at load time)
 # ============================================================================
 class _FailOpenBlastInfra(InfraRailPlugin):
-    """Fails OPEN on the QUANTITATIVE axis: within_fence only checks the protected-type membership,
-    ignoring the blast/destroy caps. Its protocol predicates + fence_axes stay HONEST, so the
-    battery's quantitative sweep catches the discrepancy."""
+    """Fails OPEN on the QUANTITATIVE axis: its resolve() ignores the blast/destroy caps. Its declared
+    schema/policy stay HONEST (blast_radius is a NUMERIC attr with an LE condition), so the battery's
+    MANDATORY full-schema sweep drives blast_radius across the cap and catches the discrepancy between
+    the declared fence and the rail's real decision."""
     name = "weak_infra_blast"
 
     def resolve(self, criterion, world, resolver) -> Verdict:
@@ -226,13 +227,53 @@ def test_register_rail_refuses_the_fail_open_blast_stub():
     assert "NON-CONFORMANT" in str(ei.value)
 
 
-def test_stock_battery_without_axes_misses_the_quant_fail_open():
-    # THE FINDING (the protocol generality report): a rail that fails open on the quantitative axis
-    # but does NOT declare fence_axes sails through the boolean/scalar-shaped stock battery. This is
-    # exactly why the protocol needed the FenceAxis extension.
-    class _NoAxes(_FailOpenBlastInfra):
-        name = "weak_infra_no_axes"
-        fence_axes = None              # withdraw the declaration -> stock 7-invariant battery only
+def test_mandatory_schema_sweep_cannot_be_dodged():
+    # THE FINDING, post-extension: under the MANDATORY declarative schema there is no "withdraw the
+    # axis" escape that the old optional fence_axes allowed. blast_radius is a NUMERIC attr the battery
+    # sweeps unconditionally, so a fail-open quantitative gate is caught regardless of how the plugin
+    # is subclassed. (The old test asserted a no-axes stub sailed through; that hole is now closed.)
+    class _TriesToDodge(_FailOpenBlastInfra):
+        name = "weak_infra_tries_to_dodge"
+        fence_axes = None              # legacy hook is gone; this attribute is inert now
 
-    rep = run_conformance(_NoAxes())
-    assert rep.all_pass, "stock battery unexpectedly caught a quant fail-open without fence_axes"
+    rep = run_conformance(_TriesToDodge())
+    assert not rep.all_pass, "mandatory schema sweep should catch the quant fail-open regardless"
+    assert "cap" in (rep.rows["GATE_PROPERTY"].counterexample or "").lower()
+
+
+class _UnboundedBlastInfra(InfraRailPlugin):
+    """The honest residual the task documents: a rail that DECLARES blast_radius NUMERIC but omits the
+    LE bounding Condition AND whose code likewise ignores the cap. Code and declared policy AGREE
+    (both fail open on blast), so the behavioral battery passes — but the unbounded numeric axis is a
+    WARNING and is VISIBLE in the rendered PolicySpec, not silently passing."""
+    name = "infra_unbounded_blast"
+
+    def policy_spec(self, world):
+        from evals._rail_core.policy_spec import Condition, EQ, LE, PolicySpec
+        base = super().policy_spec(world)
+        fence = tuple(c for c in base.fence if c.attr != "blast_radius")   # drop the LE bound
+        return PolicySpec(allowlist=base.allowlist, fence=fence)
+
+    def resolve(self, criterion, world, resolver) -> Verdict:
+        cands = self.candidates(world)
+        owned = self.owned_ids(world)
+        wa = lambda c: self.within_allowlist(world, c)
+        wf = lambda c: self.within_fence(world, c)          # shared evaluator over the unbounded spec
+        s = run_role_b_stages(criterion, cands, owned, resolver=resolver,
+                              within_allowlist=wa, within_fence=wf)
+        return Verdict(resolved=(s.status == "resolve"), target_id=s.chosen_id,
+                       escalation_source=s.escalation_source, cause=s.cause, raw=s.raw)
+
+
+def test_unbounded_numeric_axis_is_a_visible_warning_not_a_silent_pass():
+    # Declaring blast_radius with NO bounding condition is NOT refused (code + policy honestly agree
+    # to ignore the axis) — but it raises a WARNING and the rendered PolicySpec shows blast_radius
+    # without an LE bound. This is the honest residual: "is the declared policy the intended one" is a
+    # cheap REVIEW question, surfaced as data rather than buried in code.
+    rep = run_conformance(_UnboundedBlastInfra())
+    assert rep.all_pass, rep.failures                       # behavioral battery passes
+    assert any("blast_radius" in w for w in rep.warnings), rep.warnings
+    # the unbounded axis is visible in the rendered spec (no le over blast_radius)
+    assert not any("blast_radius le" in c for c in rep.policy_spec["fence"]), rep.policy_spec
+    # it still LOADS (born-certified) because code and declared policy agree
+    register_rail(_UnboundedBlastInfra())

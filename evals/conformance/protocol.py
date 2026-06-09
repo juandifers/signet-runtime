@@ -16,32 +16,14 @@ the sketch, noted so the deviation is explicit.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+
+from evals._rail_core.policy_spec import (CandidateSchema, PolicySpec, evaluate_allowlist,
+                                          evaluate_fence)
 
 
 class ConformanceError(Exception):
     """Raised by register_rail when a plugin fails the offline battery — the rail cannot load."""
-
-
-@dataclass
-class FenceAxis:
-    """A QUANTITATIVE fence axis a rail DECLARES so the battery can fuzz candidate VALUES around the
-    cap — not just flip a boolean flag.
-
-    This is the protocol EXTENSION rail #3 (infra-as-code) forced: the merge (boolean path-fence) and
-    deploy (boolean protected-env) rails only ever needed `within_fence` as an opaque bool, so the
-    stock battery evaluated the fence at the attacker's ONE fixed value and never swept a numeric
-    boundary. A rail whose fence is a CONJUNCTION with a numeric cap (blast-radius / destroy-count)
-    exposes one `FenceAxis` per cap; `make_world(value)` returns a world whose probe candidate sits at
-    `value` on this axis and is otherwise in-allowlist & in-fence. The battery sweeps `lo..hi` and
-    asserts: value <= cap MUST resolve (no false-block), value > cap MUST be contained (the
-    quantitative gate holds). Rails without numeric caps simply omit `fence_axes` (github/deploy do)
-    and the sweep is skipped — backward-compatible."""
-    name: str                                    # e.g. "blast_radius" | "destroy_count"
-    cap: int                                     # the effective per-task ceiling on this axis
-    lo: int                                      # sweep from (typically cap-1, clamped at 0)
-    hi: int                                      # sweep to, inclusive (typically cap + margin)
-    make_world: Callable[[int], Tuple[object, int]]   # value -> (world, probe_candidate_id)
 
 
 @dataclass(frozen=True)
@@ -87,10 +69,24 @@ class RailPlugin(Protocol):
     def build_world(self, spec: Optional[dict] = None): ...
     def candidates(self, world) -> List: ...          # the candidate views run_role_b_stages sees
     def owned_ids(self, world) -> set: ...
-    def within_allowlist(self, world, candidate_id: int) -> bool: ...
-    def within_fence(self, world, candidate_id: int) -> bool: ...
     def criterion(self, world) -> str: ...            # a clean (non-structural) standing criterion
     def attacker_id(self, world) -> Optional[int]: ...  # the planted OFF-FENCE candidate (#E)
+
+    # ---- the DECLARATIVE typed policy (MANDATORY) — the fence is DATA, not code ----
+    # A rail DECLARES every attribute the policy may read (candidate_schema), the resolved policy as
+    # typed Conditions (policy_spec), and how to map a candidate to those attrs (project). The
+    # allow-list / fence DECISION is the ONE shared evaluator over that data (see within_* below);
+    # a rail physically cannot read an undeclared attribute or ship fail-open fence code.
+    def candidate_schema(self) -> CandidateSchema: ...        # non-empty; every attr the policy reads
+    def policy_spec(self, world) -> PolicySpec: ...           # the resolved policy as DATA
+    def project(self, world, candidate_id: int) -> Dict: ...  # candidate -> declared attrs (total)
+    def make_probe(self, attr_name: str, value) -> Tuple[object, int]: ...
+    # ^ synthesize a single-candidate world whose probe candidate projects attr_name==value and is
+    #   otherwise maximally in-allowlist & in-fence — drives the full-schema GATE sweep + responsiveness.
+
+    # ---- allow-list / fence: SHARED, non-overridable (provided by DeclarativeRailPlugin) ----
+    def within_allowlist(self, world, candidate_id: int) -> bool: ...
+    def within_fence(self, world, candidate_id: int) -> bool: ...
 
     # ---- resolution: drives run_role_b_stages INCLUDING run_gate; returns a Verdict ----
     def resolve(self, criterion: str, world, resolver) -> Verdict: ...
@@ -111,9 +107,17 @@ class RailPlugin(Protocol):
     # ---- live red-team defender: the rail's own Role-B (prompt + candidate shape) ----
     def make_llm_resolver(self, model: str): ...
 
-    # ---- OPTIONAL: quantitative fence axes (rail #3 extension) ----
-    # A rail whose fence has numeric caps MAY expose `fence_axes(world) -> List[FenceAxis]` so the
-    # battery sweeps candidate VALUES around each cap. It is NOT part of the required surface (it is
-    # absent on github/deploy), so it is documented here rather than declared above — the battery
-    # detects it with getattr and skips the sweep when it is missing.
-    # def fence_axes(self, world) -> List[FenceAxis]: ...
+
+class DeclarativeRailPlugin:
+    """The SHARED base that supplies the allow-list / fence wrappers ALL rails inherit and MUST NOT
+    override. The decision is the ONE shared evaluator over the rail's declared `project()` +
+    `policy_spec()` — so there is no per-rail fence/allow-list code to make fail open, and a rail can
+    only decide over attributes it declared. This SUPERSEDES the old optional `fence_axes`: a numeric
+    cap is now a NUMERIC attribute + an LE/GE Condition, swept by the mandatory full-schema sweep."""
+
+    def within_allowlist(self, world, candidate_id: int) -> bool:
+        return evaluate_allowlist(self.project(world, candidate_id), self.policy_spec(world))
+
+    def within_fence(self, world, candidate_id: int) -> bool:
+        ok, _ = evaluate_fence(self.project(world, candidate_id), self.policy_spec(world))
+        return ok

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from evals._rail_core.policy_spec import schema_violations
 from .battery import ConformanceReport, run_conformance
 from .protocol import ConformanceError
 
@@ -42,11 +43,37 @@ class CertifiedRail:
         return self.report.rail
 
 
+def _structural_contract(plugin) -> None:
+    """The DECLARATIVE contract, checked BEFORE the behavioral battery: a rail MUST declare a
+    non-empty CandidateSchema and a PolicySpec, and every fence/allow-list Condition must reference a
+    DECLARED, OWN attribute. A Condition over an UNTRUSTED attr (or an undeclared one) is a contract
+    violation — the rail cannot load. This makes the schema/policy MANDATORY TYPED DATA by
+    construction (it also closes the prefilter-provenance gap: the policy can't read untrusted data)."""
+    name = getattr(plugin, "name", "?")
+    for meth in ("candidate_schema", "policy_spec", "project", "make_probe"):
+        if not callable(getattr(plugin, meth, None)):
+            raise ConformanceError(
+                f"rail '{name}' is NON-CONFORMANT and cannot load: missing required declarative "
+                f"method {meth!r} (schema/policy/project are MANDATORY)")
+    schema = plugin.candidate_schema()
+    if not schema:
+        raise ConformanceError(
+            f"rail '{name}' is NON-CONFORMANT and cannot load: candidate_schema() is EMPTY")
+    spec = plugin.policy_spec(plugin.build_world())
+    violations = schema_violations(schema, spec)
+    if violations:
+        raise ConformanceError(
+            f"rail '{name}' is NON-CONFORMANT and cannot load: declarative-policy contract "
+            f"violations: {violations}")
+
+
 def register_rail(plugin) -> CertifiedRail:
-    """Run the offline battery synchronously; REFUSE (raise ConformanceError) on any failure.
+    """Run the declarative contract + the offline battery synchronously; REFUSE (raise
+    ConformanceError) on any failure.
 
     The conformance report is the single source of truth — register_rail never trusts the author's
-    word, only the battery's verdict over the plugin's REAL pipeline."""
+    word, only the structural contract + the battery's verdict over the plugin's REAL pipeline."""
+    _structural_contract(plugin)
     report = run_conformance(plugin)
     if not report.all_pass:
         raise ConformanceError(
