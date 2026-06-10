@@ -1,0 +1,34 @@
+# .signet/policy.yaml — local containment fence for coding agents (schema v1).
+# Evaluated by `signet hook` (a Claude Code PreToolUse hook): deterministic, offline,
+# no LLM. This local gate is containment UX + tamper-evident receipts — it is NOT the
+# enforcement boundary; the server-side rail (Stage 3) is. `signet explain <path>`
+# shows exactly which rule fires.
+#
+# This repo dogfoods its own product. Crown jewels (signet/**, evals/scorecard/**)
+# were added by hand: the init heuristics propose dir-name matches (auth/infra/...)
+# and cannot know a project's domain-specific sensitive code.
+version: 1
+repo: juandifers/signet-runtime
+protect:
+- signet/**              # the frozen kernel + the gate (CLAUDE.md invariant: do not edit)
+- evals/scorecard/**     # the grader that decides "is the spec still holding?"
+- .github/workflows/**   # CI (heuristic also catches this)
+- mandates/**            # signed mandate fixtures
+- "*.pem"                # private keys (gitignored, so heuristics never see them)
+- ".env*"
+- "**/.env*"
+allow:
+- '**'
+branches:
+  protected:
+  - main
+bash:
+  deny:
+  - '*git push*--force*'
+  - '*gh pr merge*'
+  - '*terraform apply*'
+  - '*git push*origin*main*'
+  ask: []
+tiers:
+  protected_edit: deny
+  out_of_allow_edit: ask

@@ -3,6 +3,17 @@
 Read this before changing anything. It encodes decisions already made so they
 don't get re-litigated, and the invariants that must survive any refactor.
 
+> **This repo is fenced by its own product (dogfood).** `.signet/policy.yaml` is
+> live and a `signet hook` PreToolUse gate is wired (per-developer, in the
+> git-ignored `.claude/settings.local.json`; run `signet init` to wire your copy).
+> Future agent sessions will be **DENIED** on edit-class tools touching `.signet/**`,
+> `.claude/settings*.json`, `signet/**`, `evals/scorecard/**`, `.github/workflows/**`
+> and the other protected globs — **by design**. A human changes the fence by running
+> the `signet` CLI, not the agent. If you hit the gate, that is the product working —
+> do not try to disable, move, or route around it; ask the human to adjust the policy.
+> (The local gate is containment UX + tamper-evident receipts, not the enforcement
+> boundary — see LOCAL_GATE.md.)
+
 ## What this is
 
 Runtime enforcement for AP2-style agent payment mandates. AP2 produces a signed
