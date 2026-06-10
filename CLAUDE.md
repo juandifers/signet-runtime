@@ -55,6 +55,20 @@ that decision into a rail-specific *necessary input*.
 5. **Velocity aggregates per principal**, not per mandate (each cart mints a fresh
    mandate; per-mandate would never accumulate and the structuring defense dies).
 6. **Fail closed.** Any check that can't be satisfied → block. No "best effort".
+7. **LOCAL-MONOTONIC.** The local PreToolUse hook (`signet hook`) never emits
+   permissionDecision "allow"; it can only narrow what the user's own permission
+   rules would do. An "ask" that cannot be emitted degrades to deny, never to pass.
+8. **SELF-PROTECT.** `.signet/**`, `.claude/settings.json`,
+   `.claude/settings.local.json` (repo-relative — the local file holds the absolute
+   hook command) and the signet home dir (`~/.signet/**`) are always-deny for
+   edit-class tools, hardcoded and evaluated BEFORE the user policy loads. The agent
+   must not be able to move its own fence, wherever the wiring lives.
+9. **GATE-PURITY.** No LLM call, network call, or evals/* import anywhere in the
+   `signet hook` execution path. Deterministic, offline, <100ms warm.
+10. **LOCAL-RECEIPT.** Every evaluated tool call appends exactly one signed,
+    hash-chained local record bound to the policy_hash that decided it. The local
+    log is tamper-EVIDENT, not tamper-proof — the local gate is containment UX,
+    never the enforcement boundary (DESIGN.md P2; see LOCAL_GATE.md).
 
 ## The verifier pipeline order (signet/verifier.py)
 
@@ -133,6 +147,11 @@ signet/receipts.py     hash-chained signed receipts
 signet/builder.py      mint signed chains + attack-variant hooks (tests/demos use this)
 signet/authorizers/    base.py (interface), mock_broker.py (Role 2),
                        xrpl_cosigner.py (Role 1), mpc_cosigner.py (Role 1b)
+signet/fence.py        local path/command fence + .signet/policy.yaml (Stage 1;
+                       matching semantics lifted from the GitHub rail MergePolicy)
+signet/cli/            the `signet` console script: hook (PreToolUse local gate),
+                       init/status/receipts/explain, signed local receipts.
+                       NEVER import evals/* here (GATE-PURITY). See LOCAL_GATE.md.
 tests/test_attacks.py  21 attacks = the spec
 ```
 

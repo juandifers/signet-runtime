@@ -63,6 +63,15 @@ Run it the other way — with a real model instead of a forced pick — and the 
 
 A rail-agnostic kernel (signature verification, chain linkage, context-binding, exactness, policy, atomic consume-once, signed receipts) never learns about any specific rail. A **rail** is a plugin: an effect-key encoding, a typed policy, an authorizer, and a resolver binding, sitting on a shared core (the set-valued resolver, the cardinality rule, the gate, the authorizer template, the transparency log). Adding a rail does not touch the kernel — proven across three of them. Containment is inherited, not re-implemented, and a conformance suite refuses to register a rail that doesn't satisfy it. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the data flow and invariants.
 
+## Local gate (Stage 1 product surface)
+
+`pipx install signet-runtime`, then `signet init` in any repo: a two-minute, no-account
+onboarding that contains Claude Code auto mode behind a deterministic PreToolUse fence
+(`.signet/policy.yaml`), with a signed, hash-chained local receipt for every decision
+and no LLM/network call in the gate path. Stated honestly: the local hook is containment
+UX and tamper-EVIDENT logging — defense-in-depth, not the enforcement boundary (that is
+the server-side rail). See [`LOCAL_GATE.md`](./LOCAL_GATE.md).
+
 ## Grounding
 
 The design borrows deliberately. The trusted-planner / quarantined-worker split is the dual-LLM pattern, formalized as **CaMeL** (Debenedetti et al., 2025) — Signet specializes it to irreversible actions and adds cryptographic binding plus a verifiable audit log. The mandate chain follows **AP2** (Agent Payments Protocol). The transparency log is **RFC 6962** (Certificate Transparency). The "abstain when the candidate set isn't a singleton" rule comes from selective-prediction / conformal-abstention work, which finds that LLMs fail to abstain when uncertain and that a structural rule beats a confidence threshold.
