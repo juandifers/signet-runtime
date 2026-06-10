@@ -6,12 +6,18 @@ requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2",
     "pynacl>=1.5",
-    "xrpl-py>=4",
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
+    "pyyaml>=6",
 ]
 
+[project.scripts]
+signet = "signet.cli.main:main"
+
 [project.optional-dependencies]
+# Rail extras: the core install carries only the kernel + the local CLI gate.
+# xrpl-py / fastapi are imported only by the modules that need them
+# (signet/authorizers/xrpl_cosigner.py, signet/api.py) — never by `import signet`.
+xrpl = ["xrpl-py>=4"]
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
 # hypothesis is OPTIONAL: the conformance battery enumerates its adversarial output space with zero
 # deps; when hypothesis is present it ADDITIONALLY fuzzes random resolver outputs against the gate.
 dev = ["pytest>=8", "hypothesis>=6"]
@@ -28,4 +34,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["signet", "signet.authorizers"]
+packages = ["signet", "signet.authorizers", "signet.cli"]
