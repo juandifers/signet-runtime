@@ -18,9 +18,14 @@ signet = "signet.cli.main:main"
 # (signet/authorizers/xrpl_cosigner.py, signet/api.py) — never by `import signet`.
 xrpl = ["xrpl-py>=4"]
 api = ["fastapi>=0.110", "uvicorn>=0.29"]
+# The Supabase credential rail (the first keyholder slice): ES256 JWT minting/verification.
+# Imported by signet/rails/supabase/* and the broker-bypass battery (tests/test_broker_supabase.py).
+# `requests` is needed ONLY for opt-in live mode (SIGNET_SUPABASE_LIVE=1), imported lazily.
+supabase = ["pyjwt[crypto]>=2.8", "cryptography>=41", "requests>=2.31"]
 # hypothesis is OPTIONAL: the conformance battery enumerates its adversarial output space with zero
 # deps; when hypothesis is present it ADDITIONALLY fuzzes random resolver outputs against the gate.
-dev = ["pytest>=8", "hypothesis>=6"]
+# The Supabase rail crypto rides in dev so the offline broker-bypass battery runs in the suite.
+dev = ["pytest>=8", "hypothesis>=6", "pyjwt[crypto]>=2.8", "cryptography>=41"]
 # The LIVE GitHub rail-bridge (L3 manual test) — outbound to api.github.com only.
 # Not needed for the offline tests/demos; imported lazily by evals/github_railbridge/live_rail.py.
 l3-github = ["pyjwt[crypto]>=2.8", "requests>=2.31"]
@@ -34,4 +39,6 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["signet", "signet.authorizers", "signet.cli"]
+packages = ["signet", "signet.authorizers", "signet.cli", "signet.broker",
+            "signet.rails", "signet.rails.supabase", "signet.rails.egress",
+            "signet.sandbox"]
