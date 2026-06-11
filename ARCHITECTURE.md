@@ -1,87 +1,234 @@
 # Architecture
 
-Signet has two layers, and the boundary between them is the whole point. A **kernel** decides whether an action is authorized and, if so, mints a signed one-time token for it. A **rail plugin** turns that token into a rail-specific capability — concluding a GitHub check, opening a deploy gate, applying an infra change. The kernel never learns what a rail is. Adding a rail is writing a plugin; it has never required touching the kernel, and the conformance suite refuses to load a plugin that would weaken the guarantee.
+Signet is layers, and the boundaries between them are the whole point. A **kernel**
+decides whether an effect is authorized and, if so, mints a signed one-time token.
+An **authorizer** turns that token into a rail-specific capability through a fixed
+template. A **broker** exposes that template over a transport so a *separate*
+process — not the agent — holds the keys. A **sandbox** supplies the OS
+interposition that some rails need to be a real boundary. And a **local gate**
+sits in the agent's own process as defense-in-depth, explicitly not the boundary.
 
-```mermaid
-flowchart TB
-    subgraph PLUGINS["Rail plugins (per effect type)"]
-        GH["GitHub merge"]
-        DP["Deploy"]
-        INF["Infra apply"]
-    end
-    subgraph CORE["Shared core (rail-agnostic)"]
-        RESOLVE["Set-valued resolver + cardinality"]
-        GATE["Gate: owned, allow-list, fence (declarative policy)"]
-        AUTHT["Authorizer template"]
-        TLOG["RFC-6962 transparency log"]
-    end
-    subgraph KERNEL["Kernel: 10 files, 0 rail edits"]
-        VER["11-step verifier + context-bind + consume-once"]
-    end
-    subgraph CONF["Conformance regime"]
-        BATT["Invariant battery + adaptive red-team"]
-        REG["register_rail (load gate)"]
-    end
-    PLUGINS --> RESOLVE --> GATE --> VER
-    VER --> AUTHT --> TLOG
-    GATE -. "declared schema + typed policy" .-> BATT
-    BATT --> REG
-    REG -. "refuses a weak rail" .-> PLUGINS
+The kernel never learns what a rail is. Adding a rail is filling two hooks; it has
+never required touching the kernel (`core_kernel_edits_zero` 0/10 in the
+scorecard, enforced against a pinned byte-baseline).
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  LOCAL GATE (in-agent, Stage 1/2)   signet/fence.py · signet/cli/          │
+│  PreToolUse hook · deterministic · offline · signed receipts               │
+│  defense-in-depth + on-ramp — NOT a boundary (the agent can write around)  │
+└──────────────────────────────────────────────────────────────────────────┘
+        the boundary lives below, in a process the agent does not control:
+┌──────────────────────────────────────────────────────────────────────────┐
+│  BROKER  (separate OS principal)            signet/broker/                 │
+│   ├─ issuer surface (unix-socket RPC)   server.py · client.py · mandate.py │
+│   └─ proxy  surface (inline admission)  proxy.py                           │
+│            both drive ↓ the same unchanged machinery                       │
+│  AUTHORIZER TEMPLATE        signet/authorizers/base.py                     │
+│   verify_token → recheck_against_context → produce_capability  (2 hooks)   │
+│  RAILS (fill only the 2 hooks)   signet/rails/{supabase,egress}/ · authorizers/│
+│  KERNEL (10 files, 0 rail edits)   signet/verifier.py · chain · crypto …   │
+│   11-step verify · context-bind · consume-once on chain_hash · signed token│
+└──────────────────────────────────────────────────────────────────────────┘
+        OS layer that makes the not-free only-doors real:
+┌──────────────────────────────────────────────────────────────────────────┐
+│  SANDBOX  signet/sandbox/netns.py   netns + veth + nft + unprivileged exec │
+│  EGRESS-SOLE-PATH · AGENT-UNPRIVILEGED-IN-NETNS                            │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Plan before you read untrusted data
 
-The single most important structural choice: the authorized envelope is derived from **trusted instructions, frozen before the agent touches any untrusted runtime data.** The operator's mandate — the criterion and the policy scope — is loaded first and never sourced from a PR body, an issue, a plan file, or anything the agent fetched. The effective fence is `standing_policy ∩ task_mandate`, and that intersection only ever *narrows*: a task can add restrictions, never widen them. This is what makes injection a containment problem rather than an authorization problem — by the time the agent reads attacker-controlled text, the fence it has to stay inside is already fixed.
+The single most important structural choice: the authorized envelope is derived
+from **trusted instructions, frozen before the agent touches any untrusted runtime
+data.** The operator's mandate — the criterion and the policy scope — is loaded
+first and never sourced from a PR body, an issue, a plan file, or anything the
+agent fetched. The effective fence is `standing_policy ∩ task_mandate`, and that
+intersection only ever *narrows*: a task can add restrictions, never widen them.
+This is what makes injection a containment problem rather than an authorization
+problem — by the time the agent reads attacker-controlled text, the fence it has
+to stay inside is already fixed.
 
 ## The kernel pipeline, and why the order matters
 
-The verifier runs eleven checks in a deliberate order. The order is load-bearing, not cosmetic:
+The verifier (`signet/verifier.py`) runs eleven checks in a deliberate order. The
+order is load-bearing, not cosmetic:
 
-1. **Signatures** — verify every mandate signature first, before anything stateful. This is the cheap-DoS guard: junk requests can't flood the consume-once registry because they're rejected before they reach it.
-2. **Chain linkage** — Intent → Cart → Payment must hash-link correctly (each carries the prior's hash).
+1. **Signatures** — verify every mandate signature first, before anything
+   stateful. This is the cheap-DoS guard: junk requests can't flood the
+   consume-once registry because they're rejected before they reach it.
+2. **Chain linkage** — Intent → Cart → Payment must hash-link correctly.
 3. **Agent identity** — the acting agent matches the one the Intent authorized.
 4. **Action allowed** — the action is in the Intent's allow-list.
-5. **TTL / freshness** — checked against the *verifier's* clock, never a client-supplied timestamp. A client can't extend its own window.
+5. **TTL / freshness** — checked against the *verifier's* clock, never a
+   client-supplied timestamp. A client can't extend its own window.
 6. **Revocation** — the mandate hasn't been revoked.
-7. **Context binding** — the runtime context hash must equal the context the Cart committed to. This is what catches recipient/destination/merchant substitution and cross-context replay: the agent presents what it's *about* to do, and it has to match what was approved, field for field.
-8. **Exactness** — runtime amount/currency equals the Cart, the Cart is within the Intent's cap, and the recipient is on the Intent's allow-list. (Steps 7 and 8 together are "the exactness step" — 7 catches *who/where*, 8 catches *how much*.)
+7. **Context binding** — the runtime context hash must equal the context the Cart
+   committed to. This catches recipient/destination substitution and
+   cross-context replay: the agent presents what it's *about* to do, and it has to
+   match what was approved, field for field.
+8. **Exactness** — runtime amount/currency equals the Cart, the Cart is within the
+   Intent's cap, the recipient is on the allow-list. (7 catches *who/where*, 8
+   catches *how much*.)
 9. **Policy** — caps, allow-list, currency, velocity, human-approval thresholds.
-10. **Atomic consume-once** — keyed on the `chain_hash` (the exact bound transaction), this is the *last* gate before a token is issued. Replaying the identical transaction is rejected; distinct carts under one Intent are still allowed. Keying it on the chain rather than the Intent nonce is what makes multi-step mandates work without opening a replay hole.
-11. **Record spend, sign the token** — velocity spend is recorded **per principal**, not per mandate. Per-mandate accounting would let an attacker structure a large transfer across many small mandates; per-principal aggregation closes that.
+10. **Atomic consume-once** — keyed on the `chain_hash` (the exact bound
+    transaction), the *last* gate before a token is issued. Replaying the identical
+    transaction is rejected; distinct carts under one Intent are still allowed.
+    Keying on the chain rather than the Intent nonce is what makes multi-step
+    mandates work without opening a replay hole.
+11. **Record spend, sign the token** — velocity spend is recorded **per
+    principal**, not per mandate, so an attacker can't structure a large transfer
+    across many small mandates.
 
-Two invariants run underneath all of it. **Fail closed:** any check that can't be satisfied blocks; there is no best-effort path. **Trust only the token:** nothing downstream acts on the agent's word or the raw mandate — only on a verified `ExecutionToken`.
+Two invariants run underneath. **Fail closed:** any check that can't be satisfied
+blocks; there is no best-effort path. **Trust only the token:** nothing downstream
+acts on the agent's word or the raw mandate — only on a verified `ExecutionToken`.
+(The 21 attacks in `tests/test_attacks.py` are the spec for this pipeline.)
 
-## Resolution: a quarantined model that proposes, never decides
+## The authorizer template — two hooks, one flow
 
-Picking *which* target a criterion refers to often needs judgment a deterministic rule can't supply ("the PR that fixes the double-charge bug"). That judgment is the one place an LLM earns its keep — and the one place injection lives. So resolution is split:
+The authorizer is the only thing that can produce a rail capability, and it's a
+template, not a free function (`signet/authorizers/base.py`):
 
-- **Role A (trusted)** interprets the operator's criterion *only*. It never sees runtime data, and it's deterministic — no prompt surface means no injection surface.
-- **Role B (quarantined)** sees the candidates and their untrusted data and proposes matches. It runs one completion, no tools, and its output is clamped to `{owned candidate ids | unresolved}`.
+```
+authorize(token, req):                      # FINAL — the rail cannot override it
+    verify_token(token, enforcer_vk)        # signed, unexpired, bound to THIS chain
+    recheck_against_context(req)            # ← hook 1: re-derive the effect, confirm match
+    produce_capability(req)                 # ← hook 2: mint the rail-specific capability
+    # fail-closed: any step that can't be satisfied → no capability
+```
 
-The trick that makes Role B safe to be fallible is that **it returns a set, not a pick.** Asked "which one?", an LLM commits overconfidently and rarely abstains. Asked "which ones plausibly match?", a deterministic rule decides: exactly one survivor resolves, two or more escalates to a human, zero escalates. Ambiguity is a *count*, not a confidence score the model gets to fudge. A cheap deterministic pre-filter runs first — if two candidates structurally match a closing reference, it escalates before the model is even called. This came out of selective-prediction work: a structural abstention rule beats a confidence threshold, because the failure mode of these models is being confidently wrong, which no threshold catches.
+A rail fills **only** the two hooks; it physically cannot skip the token check or
+the re-check, because the base class owns the flow. This is the second containment
+layer below the kernel: even an authorizer that tried to mint unconditionally is
+stopped on an invalid token or a context mismatch. The test
+`test_broker_egress.py::test_egress_authorizer_fills_only_two_hooks` asserts
+`EgressAuthorizer.authorize is Authorizer.authorize` — the rail did not, and
+cannot, fork the flow.
 
-Whatever Role B returns, **containment never depends on it.** The set runs through the gate and the kernel regardless, so a fully captured resolver (proven with an adversarial stub that always picks the attacker) is contained the same as an honest one.
+**The rails today:**
 
-## The gate and the declarative policy
+| Rail | Module | Shape | Only-door |
+|---|---|---|---|
+| GitHub merge / deploy / infra (origin) | `evals/*_railbridge/`, `signet/authorizers/` | rail-bridge | the server-side hard rail (required check) |
+| Supabase Postgres | `signet/rails/supabase/` | credential issuer | zero-standing-cred + Postgres RLS (**free**, P9) |
+| Egress | `signet/rails/egress/` | broker-as-proxy | the netns (**OS-interposition**, P9) |
 
-Between resolution and the kernel sits the gate: `owned → allow-list → fence`, in that order, fail-closed on any stage. "Owned" is membership in the principal's candidates; "allow-list" is the configured universe ceiling (which repos, bases, services, accounts); "fence" is the scope/protected check. The ordering and the fail-closed live in **one shared function** — a rail supplies the predicates, not the control flow, so it can't reorder the stages or fail open on one.
+## The broker — multi-surface, one core
 
-The fence and allow-list are not rail *code* — they're rail **data**. Each rail declares a typed `CandidateSchema` (each attribute is `BOOL`, `CATEGORICAL(universe)`, or `NUMERIC(lo, hi)`, tagged `OWN` or `UNTRUSTED`) and a `PolicySpec`: a set of typed conditions (`IN_SET`, `LE`, `==`, …) over those attributes. A single shared evaluator decides. Three consequences fall out: a rail can't write a fail-open fence (there's no fence code to get wrong); a fence can't read an attribute it didn't declare (the projection only exposes the declared schema), and `register_rail` *refuses* a condition over an `UNTRUSTED` attribute — so the policy structurally cannot depend on attacker-controlled data; and the entire security policy of every rail is a small piece of data the scorecard renders and diffs run-over-run, so a loosened cap or a removed condition is an alarm, not a silent change. What no mechanism can know — whether the *declared* policy is the *intended* one — collapses to a one-screen review because the policy is data.
+The broker (`signet/broker/`) is the authorizer template exposed over a transport
+so the keys live in a *separate OS principal*, not the agent. Agent identity is
+established by peer credentials (SO_PEERCRED on Linux), never a bearer secret the
+agent could leak; the broker refuses to start, and refuses each connection, when
+the peer shares its uid (`test_unix_socket_refuses_to_start_when_agent_is_broker_uid`).
+It has two surfaces over one shared core (mandate provider, the unchanged
+authorize template, the kernel verifier, shared consume-once, signed receipts):
 
-## The authorizer template
+### Shape A — issuer (the DB rail, a *free* only-door)
 
-The authorizer is the only thing that can produce a rail capability, and it's a template, not a free function: `verify_token → recheck_against_context → produce_capability`. The base class runs the token check and an independent re-check (re-derive the effect from the runtime context, confirm it matches what the token bound) *before* any rail code runs. A rail fills in the re-check predicate and the capability step; it physically cannot skip the token verification or the re-check, because the template owns that flow. This is the second containment layer below the kernel: even a rail authorizer that tried to mint unconditionally is stopped on an invalid token or a context mismatch.
+Here the resource itself (Postgres + RLS) is a trustworthy external enforcer, so
+the broker only has to *decide* and *mint*; the agent then carries a scoped,
+short-lived credential to a separate resource.
 
-## How containment is inherited, verified, and made mandatory
+```
+agent ──unix-socket RPC──▶ broker (separate uid)
+  "effect: read staging.orders"     1. authenticate peer uid (≠ broker uid)
+                                     2. serialize effect → AP2 chain
+                                     3. kernel Verifier.evaluate → signed token
+                                        (consume-once on chain_hash, verifier clock)
+                                     4. SupabaseAuthorizer.authorize:
+                                        recheck: effect ∈ mandate ∩ standing
+                                        produce: mint scoped ES256 JWT (role/sub/exp/
+                                                 signet_effect_hash) — real secret stays here
+                                     5. signed receipt
+  ◀──── scoped JWT (short-lived) ────
+agent ──JWT──▶ Postgres ── RLS enforces the JWT's scope ──▶ rows
+                          (agent has NO DSN / service_role key — zero standing cred)
+```
 
-A rail is a plugin: an effect-key encoding, a typed schema + policy, a `project()` from its domain object to that schema, an authorizer, and the Role A/B bindings. Everything containment-critical — the gate, the cardinality rule, the clamp, the authorizer template, the chain verifier, the transparency log — is shared and inherited, not re-implemented. Across three structurally different rails (a boolean path fence, a boolean protected-env + scalar artifact key, and a *quantitative* blast-radius fence + *set-valued* resource key) the fresh per-rail code is domain glue; no rail has written new containment logic.
+The boundary is "the agent holds nothing it can authenticate with." Remove that
+precondition — leak a DSN into the agent's env — and the broker is reduced to
+advisory: `test_09_NEGATIVE_bypass_succeeds_when_standing_credential_present`
+constructs a direct connection *because a DSN exists* and asserts it succeeds.
+That is P8 made honest under test.
 
-Inheriting the guarantee isn't enough on its own, so a **conformance battery** verifies each plugin satisfies it: seven invariants — gate property, fail-closed, authorizer-template, bounded-to-own, cardinality, effect-key binding, schema clamp — checked over a generated cross-product of candidate worlds and adversarial resolver outputs, sweeping the full declared schema. `register_rail` runs it synchronously and **refuses to load a non-conformant rail**, so a weak gate is a load-time error, not an author's responsibility to avoid. An adaptive red-team (an attacker model writing untrusted candidate fields to maximize the chance of an off-fence endorsement) is the empirical complement: its job isn't to fool the model — that's expected — but to find an *input* that escapes containment. A breakout would mean the battery's enumerated output space had a hole; the two cross-check each other.
+### Shape B — inline proxy (the egress rail, an *OS-interposition* only-door)
+
+Here nothing trustworthy sits between the agent and "anywhere on the network," so
+the broker must be issuer **and** enforcer, on the data path. Issuer and enforcer
+collapse into one process; no bearer token is handed out — the capability is
+consumed inline at admission.
+
+```
+agent ──CONNECT host:port──▶ proxy (broker surface, signet/broker/proxy.py)
+                              1. resolve host with the broker's OWN trusted resolver
+                                 (agent cannot pick the IP → defeats raw-IP + poisoned DNS)
+                              2. serialize EgressEffect(host,port) → AP2 chain
+                              3. kernel Verifier.evaluate → signed token (consume-once)
+                              4. EgressAuthorizer.authorize:
+                                 recheck: destination ∈ mandate ∩ standing
+                                 produce: "admit + forward"  (no token to the agent)
+                              5. signed receipt (pass) — or 403 + ConsideredRejected (deny)
+  ◀── 200 Connection Established ──
+agent ⇄⇄⇄ proxy ⇄⇄⇄ upstream    verbatim byte-splice: no TLS termination, no payload
+                                 inspection (binds WHERE, never WHAT)
+```
+
+The boundary is "the agent has no network path except this proxy" —
+`EGRESS-SOLE-PATH`. Without it, a direct connection bypasses the proxy entirely:
+`test_08_NEGATIVE_direct_connection_bypasses_proxy` asserts that bypass *succeeds*
+(advisory). The sandbox is what supplies the missing precondition.
+
+## The sandbox — making the not-free only-door real
+
+`signet/sandbox/netns.py` is a privileged controller that puts the agent in a
+network namespace whose only route out is the broker proxy: a veth pair, a default
+route via the host-side veth, `nft` dropping everything except the proxy
+host:port, no NAT/forward, and no reachable resolver (so all name resolution must
+go through the proxy). The load-bearing property is **not** the plumbing — it's
+that the agent runs *unprivileged* inside the netns
+(`AGENT-UNPRIVILEGED-IN-NETNS`): the controller execs it under `setpriv
+--reuid/--regid --clear-groups --bounding-set -all --no-new-privs`, so its
+capability bounding set is empty and `CAP_NET_ADMIN` is structurally unreachable —
+it cannot add a route or flush `nft` to escape. Verified by `test_netns_egress.py`
+(privilege-gated; a measurement, not a CI invariant, because CI cannot get
+`CAP_NET_ADMIN`). It is the inverse of the advisory egress #8: same direct-bypass
+move, now blocked.
+
+## Resolution (the rail-bridge origin)
+
+The rail-bridge rails (GitHub/deploy/infra) add a quarantined resolver in front of
+the kernel for the cases where picking *which* target a criterion refers to needs
+judgment ("the PR that fixes the double-charge bug"). **Role A (trusted)**
+interprets the operator's criterion only and is deterministic. **Role B
+(quarantined)** sees the candidates and their untrusted data and returns a *set,
+not a pick* — a cardinality rule then decides: exactly one survivor resolves, two
+or more (or zero) escalates to a human. Ambiguity becomes a count, not a
+confidence score the model gets to fudge. Whatever Role B returns, containment
+never depends on it: the set runs through the same gate and kernel, so a fully
+captured resolver (proven with an adversarial stub) is contained the same as an
+honest one. A conformance battery + adaptive red-team gate rail registration
+(`rail_conformance` 3/3, `red_team_breakout_zero`). This machinery is real and
+CI-tested but it is the *origin*; the product's boundary is the keyholder broker.
 
 ## The audit log
 
-Every decision — allow, block, or escalate — appends a hash-chained signed receipt and a structured `DecisionRecord` to an RFC-6962 Merkle log. An auditor verifies a single decision from `(record, inclusion proof, signed tree head, pinned key)` alone, with no access to the running system, which is what defeats after-the-fact equivocation. Role B's reasoning narrative is hashed and only the *hash* is anchored — the trace is tamper-evident but its content never enters the log. The receipt carries a `decision_record_hash` backlink (the single additive field the kernel gained), so a receipt traveling on its own is self-describing.
+Every decision — allow, block, or escalate — appends a hash-chained signed receipt
+bound to the `policy_hash` that decided it. An auditor verifies a single decision
+from `(record, signed root, pinned key)` alone, with no access to the running
+system — `test_capability_independently_verifiable_without_broker` and the
+receipt-chain tests prove this. The local log is tamper-**evident**, not
+tamper-proof: it is containment UX, never the enforcement boundary (LOCAL_GATE.md,
+DESIGN.md P2). The immutable cross-host anchor (S3 Object-Lock / Rekor) is on the
+roadmap.
 
 ## What's deliberately not in the kernel
 
-The kernel doesn't try to detect prompt injection, doesn't reason about rails, and doesn't patch the threats that belong upstream — a correctly-signed but malicious chain (mitigated by human-present thresholds at signing time), principal key compromise, agent–merchant collusion. Several primitives are proof-of-concept and isolated for swapping: Ed25519 (→ ECDSA P-256 for AP2 verifiable credentials), sorted-keys JSON (→ RFC 8785 JCS), single-process SQLite consume-once (→ a multi-instance atomic store), and a local append-only anchor (→ a real immutable log). Each is one file; none is in the decision path's logic, only its primitives.
+The kernel doesn't detect prompt injection, doesn't reason about rails, and
+doesn't patch the threats that belong upstream — a correctly-signed but malicious
+chain (mitigated by human-present thresholds at signing time), principal key
+compromise, agent–merchant collusion. Several primitives are proof-of-concept and
+isolated for swapping: Ed25519 (→ ECDSA P-256), sorted-keys JSON (→ RFC 8785 JCS),
+single-process SQLite consume-once (→ a multi-instance atomic store), and a local
+append-only anchor (→ a real immutable log). Each is one file; none is in the
+decision logic, only its primitives.

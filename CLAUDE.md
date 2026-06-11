@@ -81,6 +81,58 @@ that decision into a rail-specific *necessary input*.
     log is tamper-EVIDENT, not tamper-proof — the local gate is containment UX,
     never the enforcement boundary (DESIGN.md P2; see LOCAL_GATE.md).
 
+### Broker / keyholder rails (DESIGN.md P7/P8; see signet/broker/, signet/rails/)
+
+11. **ZERO-STANDING-ELEVATED-CRED.** The agent process must hold NO secret/
+    service_role key, NO JWT signing key, and NO direct DB connection string. It may
+    hold the RLS-neutered publishable key. To touch a protected resource it must
+    request a brokered, short-lived, effect-bound capability. This is the only-door
+    *for free*; if a standing elevated credential leaks into the agent's env, the
+    broker is reduced to advisory (proven by the Phase-4 #9 negative test).
+12. **CAP-BOUND.** Every issued capability is bound to a single effect
+    (`signet_effect_hash`), carries an `exp`, and is consume-once on `chain_hash`
+    (the kernel verifier mints it — the broker never forks consume-once). Replay
+    within the capability's life is refused; the captured credential is dead after
+    `exp`; the frozen mandate constrains regardless of dwell time.
+13. **BROKER-SEPARATE-PRINCIPAL.** The broker runs as a distinct OS user; agent
+    identity is established by peer credentials (SO_PEERCRED), never a bearer secret
+    the agent could leak. The broker refuses to start, and refuses each connection,
+    when the peer shares the broker's uid (the only-door is void).
+14. **ONLY-DOOR-OR-DECLARE.** A rail claims "boundary" only where its resource is
+    unreachable without a brokered capability. Where an ambient path exists (raw
+    egress, a leaked DSN), the claim is downgraded to "advisory" in docs AND a
+    negative test records it (Phase-4 #9 is the template) — overclaiming containment
+    is a violation on par with a fabricated result.
+15. **EGRESS-SOLE-PATH.** The agent has NO network egress except the broker proxy.
+    This is now **ENFORCED** under the netns deployment (`signet/sandbox/netns.py`):
+    the controller puts the agent in a network namespace whose only route out is the
+    proxy (default route via the host-side veth + nft drop-OUTPUT-except-proxy + no
+    NAT/forward + no resolver). Where the netns is ABSENT the rail stays **advisory**,
+    and `test_broker_egress.py` #8 records that state (a direct connection bypasses
+    the proxy and SUCCEEDS). The two are the two halves of ONLY-DOOR-OR-DECLARE, both
+    true and both kept: the deterministic #8 (advisory-WITHOUT, always-run) and
+    `test_netns_egress.py` (boundary-WITH, opt-in, needs CAP_NET_ADMIN — a MEASUREMENT,
+    NOT a CI invariant; CI cannot get CAP_NET_ADMIN, so it skips cleanly). The egress
+    proxy is the broker's second surface (inline admission); it binds the DESTINATION
+    (host+port), resolves DNS itself (trusted), and splices bytes verbatim — no TLS
+    termination, no payload inspection (DESIGN.md P9: the first OS-interposition
+    only-door; see signet/broker/proxy.py, signet/rails/egress/, signet/sandbox/).
+16. **AGENT-UNPRIVILEGED-IN-NETNS.** The sandboxed agent has NO CAP_NET_ADMIN over its
+    own network namespace; only the controller (privileged, a separate principal —
+    BROKER-SEPARATE-PRINCIPAL extended) configures it. Without this the only-door is
+    void: an agent that can add a route, flush nftables, or raise an interface escapes
+    silently. The controller execs the agent under `setpriv --reuid/--regid
+    --clear-groups --bounding-set -all --no-new-privs`, so the agent's capability
+    bounding set is empty and CAP_NET_ADMIN is structurally unreachable (verified by
+    `test_netns_egress.py`: in-netns `ip route add` / `nft flush` are DENIED). The
+    netns plumbing is the easy part; this privilege drop is the actual boundary.
+
+The broker IS the unchanged Role-2 authorizer template over a transport: it reuses
+`signet/authorizers/base.py` (`verify_token → recheck_against_context →
+produce_capability`) and the unchanged kernel `Verifier` (consume-once, signed
+token). A rail fills ONLY the two content hooks (see
+`signet/rails/supabase/authorizer.py`); it never edits the kernel or the template.
+
 ## The verifier pipeline order (signet/verifier.py)
 
 signatures → chain linkage → agent identity → action allowed → TTL → revocation →
@@ -156,14 +208,27 @@ signet/nonce.py        SQLite atomic consume-once
 signet/revocation.py   execution-time mandate revocation (in-memory set)
 signet/receipts.py     hash-chained signed receipts
 signet/builder.py      mint signed chains + attack-variant hooks (tests/demos use this)
-signet/authorizers/    base.py (interface), mock_broker.py (Role 2),
-                       xrpl_cosigner.py (Role 1), mpc_cosigner.py (Role 1b)
+signet/authorizers/    base.py (the Role-2 template — FILL ONLY 2 HOOKS), mock_broker.py
+                       (Role 2), xrpl_cosigner.py (Role 1), mpc_cosigner.py (Role 1b)
+signet/broker/         the broker = authorizer template over a transport (separate OS
+                       principal). MULTI-SURFACE: server.py/client.py (unix-socket issuer
+                       RPC, the DB rail) + proxy.py (inline egress proxy); mandate.py,
+                       protocol.py. Reuses base.py + kernel Verifier; forks nothing.
+signet/rails/          keyholder rails, each fills ONLY base.py's two hooks:
+                       supabase/ (DB — free only-door, ES256 scoped JWT, Postgres/RLS),
+                       egress/   (broker-as-proxy — OS-interposition only-door)
+signet/sandbox/        netns.py — the EGRESS-SOLE-PATH only-door (netns + veth + nft +
+                       unprivileged exec); _agent_probe.py. Linux-only; privilege-gated.
 signet/fence.py        local path/command fence + .signet/policy.yaml (Stage 1;
                        matching semantics lifted from the GitHub rail MergePolicy)
 signet/cli/            the `signet` console script: hook (PreToolUse local gate),
-                       init/status/receipts/explain, signed local receipts.
+                       init/status/receipts/explain, attack_me.py, signed local receipts.
                        NEVER import evals/* here (GATE-PURITY). See LOCAL_GATE.md.
-tests/test_attacks.py  21 attacks = the spec
+tests/test_attacks.py            21 attacks = the kernel spec
+tests/test_broker_supabase.py    DB-rail bypass battery (#9 = leaked-cred advisory)
+tests/test_broker_egress.py      egress bypass battery (#8 = no-netns advisory)
+tests/test_netns_egress.py       netns boundary (privilege-gated; a measurement)
+tests/test_local_fence.py        the local gate + tests/test_attack_me.py (the bare-push gap)
 ```
 
 ## Knowledge base (second brain)
