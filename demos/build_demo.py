@@ -20,6 +20,7 @@ from pathlib import Path
 
 from demos.trace_pipeline import build_trace
 from demos.trace_resolution import build_resolution_trace
+from demos.build_attack_trace import build_attack_trace
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "demos" / "demo_template.html"
@@ -38,6 +39,9 @@ def _git_sha() -> str:
 def main() -> int:
     trace = build_trace()
     trace["resolution"] = build_resolution_trace()
+    # GENERATED at build time by running the REAL local gate (`signet attack-me --json`) —
+    # the Stage 2 local-gate tab is a projection of the shipped gate, not hand-authored.
+    trace["attack_me"] = build_attack_trace()
     # A RECORDED eval result (not regenerated here — needs a live model). Optional: if the file is
     # absent the page simply omits the evidence panel.
     ad_path = ROOT / "demos" / "agentdojo_result.json"

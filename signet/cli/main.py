@@ -60,11 +60,24 @@ def main(argv=None) -> int:
                    "wired by `signet init` — not for interactive use). Deny/ask only; "
                    "never allows. Bash gating is heuristic pattern containment.")
 
+    p = sub.add_parser("attack-me", help="drive hostile tool calls through the REAL gate "
+                       "in a throwaway sandbox — watch each get DENIED with a signed, "
+                       "verifiable receipt (the 30-second conversion demo)")
+    p.add_argument("--keep", action="store_true",
+                   help="keep the sandbox + print the `signet receipts --verify` command")
+    p.add_argument("--json", action="store_true",
+                   help="emit the structured trace (acts, payloads, verdicts, receipts)")
+    p.add_argument("--quiet", action="store_true",
+                   help="suppress narration, keep per-act verdict lines (for CI)")
+
     args = parser.parse_args(argv)
     if args.cmd == "explain" and (args.path is None) == (args.bash is None):
         parser.error("explain needs exactly one of <path> or --bash \"<cmd>\"")
 
     from . import init_cmd
+    if args.cmd == "attack-me":
+        from .attack_me import cmd_attack_me
+        return cmd_attack_me(args)
     return {"init": init_cmd.cmd_init, "status": init_cmd.cmd_status,
             "receipts": init_cmd.cmd_receipts, "explain": init_cmd.cmd_explain}[args.cmd](args)
 
