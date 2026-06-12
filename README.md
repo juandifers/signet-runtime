@@ -50,6 +50,60 @@ a sole path that passes through the broker. Where no such door exists, Signet sa
 so, in this README and in a test, rather than overclaiming. That honesty is the
 point of the status map below.
 
+## How it works
+
+```mermaid
+flowchart TD
+    OP["Operator — task mandate, frozen<br/>BEFORE any untrusted input"]:::trust
+    SP["Standing policy"]:::trust
+    OP --> FENCE["Effective fence = standing ∩ mandate<br/>(only ever narrows)"]:::trust
+    SP --> FENCE
+
+    subgraph AGENTBOX["Agent host — assume the model is compromised"]
+        AGENT["Agent — quarantined LLM + the code it writes<br/>holds NO standing credential"]:::untrust
+        LG["Local gate · signet hook<br/>defense-in-depth, NOT the boundary"]:::soft
+    end
+    AGENT -. guarded by .-> LG
+
+    subgraph BROKERBOX["Broker — separate OS principal, holds the keys"]
+        KERNEL["Kernel Verifier · 11 checks · context-bind<br/>consume-once on chain_hash · signed one-time token"]:::core
+        TMPL["Authorizer template<br/>recheck effect ∈ fence → produce capability"]:::core
+        KERNEL --> TMPL
+    end
+
+    AGENT ==>|"capability request<br/>(effect + bound params)"| KERNEL
+    FENCE --> TMPL
+    TMPL -->|granted| RCPT["signed receipt"]:::rcpt
+    TMPL -->|refused| REJ["ConsideredRejected<br/>signed deny receipt"]:::rcpt
+
+    TMPL ==>|"DB rail · FREE only-door"| JWT["scoped, short-lived JWT"]:::cap
+    JWT ==> PG["Postgres + RLS<br/>enforces the scope"]:::ext
+    TMPL ==>|"egress rail · OS-interposition"| PROXY["inline proxy<br/>admit + forward verbatim"]:::cap
+    PROXY ==> NET["upstream host:port"]:::ext
+
+    NETNS["netns sandbox · EGRESS-SOLE-PATH<br/>agent unprivileged · sole route out = the proxy"]:::os
+    NETNS -. forces all egress through .-> PROXY
+
+    classDef trust fill:#e6f4ea,stroke:#34a853,color:#111;
+    classDef untrust fill:#fce8e6,stroke:#ea4335,color:#111;
+    classDef core fill:#e8f0fe,stroke:#4285f4,color:#111;
+    classDef cap fill:#fef7e0,stroke:#f9ab00,color:#111;
+    classDef ext fill:#f1f3f4,stroke:#9aa0a6,color:#111;
+    classDef rcpt fill:#f3e8fd,stroke:#a142f4,color:#111;
+    classDef os fill:#e0f7fa,stroke:#00acc1,color:#111;
+    classDef soft fill:#ffffff,stroke:#9aa0a6,stroke-dasharray:5 5,color:#111;
+```
+
+The agent holds nothing it can authenticate with; it can only *ask*. The broker —
+a separate OS principal — runs the unchanged kernel verifier and authorizer
+template against the frozen fence, then hands out one of two only-door shapes: a
+**scoped credential** the resource itself enforces (the *free* DB pattern) or an
+**inline-admitted connection** through a proxy the netns makes unavoidable (the
+*OS-interposition* egress pattern). Every outcome, granted or refused, leaves a
+signed receipt. The in-process local gate is drawn dashed on purpose: it is
+defense-in-depth, not the boundary. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for
+the per-rail request paths.
+
 ## What exists — the honest status map
 
 This is the scorecard discipline applied to prose. Every component carries two
@@ -178,14 +232,6 @@ python -m demos.broker_egress_demo     # egress rail: admit/refuse + the advisor
 # The egress OS boundary (Linux + CAP_NET_ADMIN only; skips cleanly elsewhere):
 SIGNET_NETNS_TEST=1 sudo -E python -m pytest tests/test_netns_egress.py -v
 ```
-
-> **Dogfood (intended).** This repo is designed to be fenced by its own product:
-> `.signet/policy.yaml` protecting `signet/**`, `evals/scorecard/**`, and the
-> workflow files, with a `signet hook` PreToolUse gate wired per-developer. Run
-> `signet init` to wire your copy and `signet status` to confirm it reports
-> **WIRED**. *(At the time of writing the local fence is being re-wired by hand;
-> treat the dogfood gate as the intended state, confirmed by `signet status`, not
-> an assertion this README can make for your checkout.)*
 
 ## Status of the primitives
 
