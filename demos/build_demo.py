@@ -20,7 +20,9 @@ from pathlib import Path
 
 from demos.trace_pipeline import build_trace
 from demos.trace_resolution import build_resolution_trace
-from demos.build_attack_trace import build_attack_trace
+# build_attack_trace is imported lazily inside main(): it (and the `signet` CLI it shells out
+# to) is a best-effort enrichment — the slim `demo` branch / minimal Pages build env does not
+# carry signet/cli, so the import must not be load-bearing for the whole build.
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "demos" / "demo_template.html"
@@ -41,7 +43,14 @@ def main() -> int:
     trace["resolution"] = build_resolution_trace()
     # GENERATED at build time by running the REAL local gate (`signet attack-me --json`) —
     # the Stage 2 local-gate tab is a projection of the shipped gate, not hand-authored.
-    trace["attack_me"] = build_attack_trace()
+    # Best-effort, like the recorded panels below: it needs signet/cli (absent on the slim demo
+    # branch / minimal Pages env). On any failure the page omits the attack-me tab rather than
+    # failing the whole build — the gauntlet (build_trace) stays mandatory.
+    try:
+        from demos.build_attack_trace import build_attack_trace
+        trace["attack_me"] = build_attack_trace()
+    except Exception as exc:
+        print(f"  (attack-me panel omitted: {type(exc).__name__}: {exc})")
     # A RECORDED eval result (not regenerated here — needs a live model). Optional: if the file is
     # absent the page simply omits the evidence panel.
     ad_path = ROOT / "demos" / "agentdojo_result.json"
