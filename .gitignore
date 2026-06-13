@@ -9,3 +9,4 @@ __pycache__/
 
 # Generated demo output — CI rebuilds this from the kernel on the `demo` branch.
 docs/
+live_demo_specs.md
