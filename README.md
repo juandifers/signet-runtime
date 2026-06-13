@@ -122,11 +122,12 @@ publish the advisory and out-of-scope rows on purpose; most products don't.
 | Rail-bridge rails — GitHub merge / deploy / infra-apply (the origin) | built + CI-tested | boundary **via the server-side hard rail** (advisory until the required-check is configured) | `rail_conformance` 3/3; `red_team_breakout_zero` |
 | Signed, hash-chained local receipts | built + CI-tested | tamper-**evident** (independently verifiable from `record + key`) | `test_broker_supabase.py::test_capability_independently_verifiable_without_broker` |
 | Local gate — `signet hook` + `signet attack-me` (Stage 1/2) | built + CI-tested | **defense-in-depth — NOT a boundary** | `tests/test_local_fence.py` (14); `tests/test_attack_me.py` (7) |
+| **Egress containment, measured — live LLM on AgentDojo** (attack-success 60%→0%, utility held, every block clean-room-verified) | built + measured (opt-in live run) | boundary logic exercised end-to-end via the eval chokepoint; production proxy + netns pending | `tests/test_egress_agentdojo.py`; report: `evals/agentdojo/EGRESS_CONTAINMENT_RUN.md` |
 | Output/emission containment (the link-preview exfil variant) | designed — out of scope | N/A | DESIGN.md egress §; `test_broker_egress.py::test_09c…` |
 | Exfil through an *allowlisted* destination (binding is *where*, not *what*) | out of scope by design | N/A | `test_broker_egress.py::test_09a…` |
 | Immutable receipt anchor (S3 Object-Lock / Rekor) | planned | N/A | — |
 | Rootless sandbox · broker key custody · agent-sandbox launcher · onboarding | planned | N/A | — |
-| Containment demo (autonomous agent in the sandbox, agent-initiated exfil blocked) | planned | N/A | — |
+| Full-sandbox containment (a genuinely autonomous agent inside the netns, exfil blocked by the OS — not the eval harness) | planned (the measured eval-chokepoint version above is the first step) | N/A | — |
 
 Reading the map: a **boundary** is enforced structurally; **advisory** means the
 logic is real and tested but a precondition (zero-standing-cred, or the netns)
@@ -158,6 +159,45 @@ signet receipts --verify              -> chain + signatures intact
 `signet attack-me` is also the proof of the keyholder thesis: ACT 3b is the
 bare-push gap that no command inspector can close — which is *why* the boundary
 must be a held key, not a watched command. See [`LOCAL_GATE.md`](./LOCAL_GATE.md).
+
+## Does it actually hold? A live agent, measured
+
+It's easy to claim *"when the model is fooled, the damage still can't happen."*
+It's harder to show it — so we did. We took
+[AgentDojo](https://github.com/ethz-spylab/agent-dojo), an academic
+prompt-injection benchmark, and ran a real model (`gpt-4o-mini`) through its Slack
+task suite while live injections tried to smuggle a secret out to an attacker's
+URL. The scoring is **AgentDojo's own** attack-success measure, not a metric we
+invented. We ran it twice on the same tasks: once with the egress rail watching
+but not enforcing — to *measure* the baseline rather than assume it — and once with
+it enforcing.
+
+| | rail off | rail on |
+|---|---|---|
+| **attack succeeds** (the secret leaves) | **60%** — the injections genuinely worked | **0%** — every attempt blocked |
+| **task still completed** (legitimate work) | 80% | 80% — no regression |
+
+The rail only gets credit where the model was actually fooled: 6 of the 10 attacks
+landed without it, and it stopped all 6. The other 4 the model refused on its own —
+those don't exercise the rail, so we report them separately and don't count them.
+
+And the blocks are more than blocked — they're auditable. Each one wrote a signed
+receipt, and 15 of 15 we sampled re-verified from scratch using a standalone
+checker that **can't even import Signet's code** — so the evidence doesn't depend on
+trusting the system that produced it.
+
+**Where this sits, honestly.** This exercises the real decision logic end-to-end
+against a live, compromisable model on a public benchmark — not a staged demo. It
+runs through the evaluation-layer chokepoint (the same logic the production proxy
+uses), not yet the OS-level sandbox; and because the rail keys on *destination*,
+exfil through an already-trusted host is out of scope by design (see the threat
+model). Full numbers and provenance:
+[`evals/agentdojo/EGRESS_CONTAINMENT_RUN.md`](./evals/agentdojo/EGRESS_CONTAINMENT_RUN.md).
+
+```bash
+python -m evals.agentdojo.egress_run --selftest          # offline wiring check — no API key, no spend
+python -m evals.agentdojo.egress_run --model gpt-4o-mini --max-pairs 10   # the live paired run
+```
 
 ## Threat model
 
@@ -194,9 +234,12 @@ predicts, in advance, which rails are cheap boundaries and which need OS help.
 
 ## Roadmap (planned — none of this is claimed as working)
 
-- **The containment demo** — a controlled autonomous agent running inside the
-  sandbox, with an agent-*initiated* exfil attempt blocked by the egress
-  boundary (this is the agent-initiated case, **not** the link-preview attack).
+- **The full-sandbox containment demo** — the egress rail is now *measured*
+  against a live, compromisable model on AgentDojo (see *A live agent, measured*
+  above); the step that remains is the same result with a genuinely autonomous
+  agent inside the netns sandbox, where the OS — not the eval harness — makes the
+  proxy the only way out. (The agent-*initiated* case, **not** the link-preview
+  attack.)
 - **Productization** — making `EGRESS-SOLE-PATH` real beyond the privilege-gated
   test (rootless netns), broker/controller hardening and key custody (the broker
   is now the sole egress path *and* holds the keys — the highest-value target),
@@ -228,6 +271,10 @@ python -m evals.scorecard          # invariants vs measurements; exit 1 on any i
 
 python -m demos.broker_supabase_demo   # DB rail: brokered scoped JWT vs leaked-DSN bypass (P8)
 python -m demos.broker_egress_demo     # egress rail: admit/refuse + the advisory-without-netns bypass
+
+python -m evals.agentdojo.egress_run --selftest   # AgentDojo containment: offline wiring check (no key)
+# the live paired run (needs an OpenAI key; capped, cached, cheap model by default):
+python -m evals.agentdojo.egress_run --model gpt-4o-mini --max-pairs 10
 
 # The egress OS boundary (Linux + CAP_NET_ADMIN only; skips cleanly elsewhere):
 SIGNET_NETNS_TEST=1 sudo -E python -m pytest tests/test_netns_egress.py -v
