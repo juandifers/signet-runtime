@@ -282,6 +282,17 @@
   .ad-prov{padding:11px 20px; border-top:1px solid var(--line); background:rgba(230,197,106,.04);
     font-size:11.5px; color:var(--haze)}
   .ad-prov b{color:var(--seal)}
+  /* egress-containment panel reuses the .ad family; metric/value/over table + a neutral stat */
+  .ad-stat .num.hold{color:var(--seal)}
+  .eg-stack{display:flex; flex-direction:column; gap:16px}
+  .ad-scope{padding:0 20px 14px; font-size:11.5px; color:var(--haze); line-height:1.5}
+  .ad-scope b{color:var(--seal)}
+  .ad-table.eg-table .adr{grid-template-columns:1.7fr 1fr 1.2fr}
+  .ad-table.eg-table .adc.good{color:var(--pass)} .ad-table.eg-table .adc.bad{color:var(--block)}
+  @media(max-width:680px){
+    .ad-table.eg-table .adr{grid-template-columns:1fr 1fr}
+    .ad-table.eg-table .adc:nth-child(n+3){border-top:1px solid var(--line)}
+  }
   /* live-on-github panel reuses the .ad family; its table has one extra column */
   .ad-table.lg-table .adr{grid-template-columns:.85fr .65fr 1.5fr 1.3fr .85fr 1fr}
   .ad-table.lg-table .adc.block{color:var(--block)}
@@ -493,6 +504,9 @@
 
   <!-- MEASURED ON AGENTDOJO (recorded result, rendered from data) -->
   <div id="ad-panel"></div>
+
+  <!-- EGRESS CONTAINMENT ON AGENTDOJO (recorded result, rendered from data) -->
+  <div id="egress-panel"></div>
 
   <!-- WRITE A RAIL -->
   <section class="rail-section">
@@ -1033,6 +1047,55 @@
       +'</div>';
   }
 
+  // ================= EGRESS-CONTAINMENT EVIDENCE PANEL =================
+  // Recorded AgentDojo egress run (data from demos/egress_result.json). Render-from-data,
+  // omit the panel entirely if the file was absent. Mirrors renderAgentDojo.
+  function renderEgress(){
+    const eg = TRACE.egress;
+    const host = document.getElementById('egress-panel');
+    if(!host) return;
+    if(!eg){ host.innerHTML=''; return; }
+    const rows = (eg.rows||[]).map(r=>
+      '<div class="adr"><div class="adc"><span class="name">'+escapeHtml(r.metric)+'</span></div>'
+      +'<div class="adc'+(r.kind==='good'?' good':r.kind==='bad'?' bad':'')+'">'+escapeHtml(r.value)+'</div>'
+      +'<div class="adc">'+escapeHtml(r.over)+'</div></div>').join('');
+    host.innerHTML =
+      '<div class="ad">'
+      +'<div class="ad-h"><div class="ad-eyebrow">Measured · <b>live egress containment</b></div>'
+      +'<h2>When the model is fooled, the bytes still can\'t leave</h2>'
+      +'<div class="ad-cap">'+escapeHtml(eg.label)+'</div></div>'
+      +'<div class="ad-body">'
+        +'<div class="eg-stack">'
+          +'<div class="ad-big">'
+            +'<div class="ad-stat"><span class="num bad">'+eg.headline.asr_baseline+'</span>'
+            +'<span class="lab">attack success · rail off</span></div>'
+            +'<div class="ad-arrow">→</div>'
+            +'<div class="ad-stat"><span class="num good">'+eg.headline.asr_signet+'</span>'
+            +'<span class="lab">attack success · rail on</span></div>'
+          +'</div>'
+          +'<div class="ad-big">'
+            +'<div class="ad-stat"><span class="num hold">'+eg.headline.utility_baseline+'</span>'
+            +'<span class="lab">task utility · rail off</span></div>'
+            +'<div class="ad-arrow">→</div>'
+            +'<div class="ad-stat"><span class="num hold">'+eg.headline.utility_signet+'</span>'
+            +'<span class="lab">task utility · rail on</span></div>'
+          +'</div>'
+        +'</div>'
+        +'<div class="ad-bridge"><span class="blocked">'+eg.headline.blocked
+          +' exfil attempts blocked · '+eg.headline.receipts
+          +' receipts verified clean-room.</span> '+escapeHtml(eg.bridge)+'</div>'
+      +'</div>'
+      +'<div class="ad-table eg-table">'
+        +'<div class="adr head"><div class="adc">Measurement</div>'
+        +'<div class="adc">Value</div><div class="adc">Over</div></div>'
+        +rows
+      +'</div>'
+      +'<div class="ad-note">'+escapeHtml(eg.note)+'</div>'
+      +'<div class="ad-scope"><b>Scope.</b> '+escapeHtml(eg.scope)+'</div>'
+      +'<div class="ad-prov"><b>Provenance.</b> '+escapeHtml(eg.provenance)+'</div>'
+      +'</div>';
+  }
+
   // Recorded REAL Check Runs from a live GitHub App run (data from demos/live_github_result.json).
   // Mirrors renderAgentDojo: render-from-data, omit the panel entirely if the file was absent.
   function renderLiveGitHub(){
@@ -1151,6 +1214,7 @@
     // resolution is the side tab -> build now, play lazily on first open.
     buildResChips(); buildBench(); resEls.run.addEventListener('click', playRes);
     renderAgentDojo();
+    renderEgress();
     renderLiveGitHub();
     renderAttackMe();
     document.getElementById('lede').textContent = LEDE.enforcement;

@@ -23,6 +23,10 @@ from pathlib import Path
 
 import pytest
 
+# agentdojo lives in the `eval` extra (heavy/academic), not `dev`; skip cleanly so a
+# bare `pip install -e ".[dev]"` runs green. `pip install -e ".[dev,eval]"` runs this too.
+pytest.importorskip("agentdojo", reason="agentdojo not installed — run: pip install -e '.[dev,eval]'")
+
 from agentdojo.functions_runtime import FunctionCall, FunctionsRuntime
 from agentdojo.task_suite.load_suites import get_suite
 

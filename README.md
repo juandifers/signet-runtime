@@ -1,300 +1,172 @@
 # Signet Runtime
 
-**A keyholder enforcement layer for autonomous agents.** Signet sits below the
-model and holds the keys to every irreversible effect — moving money, merging a
-PR, applying infrastructure, reaching the network, touching a database. The agent
-holds nothing. To cause a privileged effect it must ask a separate broker for a
-short-lived, effect-bound, single-use capability, and the broker issues that
-capability only after re-checking the request against a mandate frozen *before*
-the agent read any untrusted input.
+**A runtime enforcement layer that contains AI agents structurally — below the model,
+with an independently verifiable proof of every decision.**
 
-The design starts from a concession most agent-security tools won't make:
-**assume the model has already been compromised by prompt injection.** Signet
-does not try to recognize a malicious action — it assumes it cannot. Instead it
-removes the agent's ability to *perform* the action unilaterally. So the
-guarantee isn't "the model won't be fooled"; it's *"when the model is fooled, the
-harmful effect still can't execute, and there's a signed receipt proving it
-didn't."*
+The thesis in one line: if an AI agent can be *talked into* doing harm, then safety cannot
+live in the agent. Signet puts a deterministic enforcement layer *beneath* the model that
+decides what the agent is allowed to actually do, binds the decision to the exact effect,
+and emits a receipt anyone can verify — without trusting Signet.
 
-> AP2 proves an action was authorized. Signet enforces that the authorized action
-> — and only that action — executes once, in context, under policy, and anchors
-> independently-verifiable proof that it did.
+> **Status — research prototype.** The core is built and empirically validated; the
+> production path and several rails are prototype or not yet wired. The boundaries are
+> stated in [Status & scope](#status--scope), not hidden.
 
 ---
 
-## The keyholder model
+## The result — and you can check it yourself
 
-There are two ways to put a gate in front of a dangerous action, and only one of
-them is a boundary.
+Against the [AgentDojo](https://github.com/ethz-spylab/agentdojo) prompt-injection
+benchmark (slack suite, `important_instructions` attack, `gpt-4o-mini`):
 
-- **Inspect the command.** Watch the agent's tool calls and block the bad ones.
-  This can always be fooled (a malicious action described as benign) or *skipped*
-  (an agent that writes code reaches the effect by a path the inspector never
-  sees). It is monitoring, not enforcement.
-- **Hold the key.** Don't judge the action — own the capability the action
-  requires, and hand out one door at a time. The agent cannot perform the effect
-  because it does not possess what the effect needs.
+- A real model was compromised by the benchmark's published injections **60% of the time**
+  (6 of 10 attack pairs).
+- On **every** compromised run, the injected exfiltration was **denied — 0 of 6 succeeded** —
+  on the operator's *standing* policy fence, the part no learned rule can move.
+- Utility on legitimate tasks was **unchanged** by the rail (80% with and without it): it
+  blocked the exfiltration without breaking the work.
+- Every block emitted an **independently verifiable receipt**: **15/15** verified
+  clean-room, **14/14** carrying the operator-ceiling attestation.
 
-Signet is the second. *Stop inspecting the command; hold the only key.* (DESIGN.md
-**P7**.)
+**Honest scope, up front:** this is the *eval* enforcement path, not the production proxy;
+the rail is *destination-based* — it binds where data goes, not what's in it; the injection
+targets a non-allowlisted destination. Full report:
+[`evals/agentdojo/EGRESS_CONTAINMENT_RUN.md`](./evals/agentdojo/EGRESS_CONTAINMENT_RUN.md)
+(and the standing invariant-vs-measurement companion,
+[`EGRESS_CONTAINMENT.md`](./evals/agentdojo/EGRESS_CONTAINMENT.md)).
 
-The proof that inspection cannot be the boundary is in this repo: `signet
-attack-me` runs a bare `git push` that reaches a protected branch **without any
-command the path-inspecting gate can match** — the dangerous effect simply isn't
-in the string. Capability issuance has no such gap: the effect is *in the
-request*, frozen and bound before any credential exists. (Trace:
-`tests/test_attack_me.py::test_act3b_bare_push_is_the_honest_gap`.)
+### Verify it in two minutes — with Signet un-importable
 
-A rail is a real boundary only where the protected resource has an **only-door** —
-a sole path that passes through the broker. Where no such door exists, Signet says
-so, in this README and in a test, rather than overclaiming. That honesty is the
-point of the status map below.
+You don't have to trust any of the above. The receipts verify with a **clean-room** tool
+that imports no Signet code (Python standard library only): it reimplements the RFC 6962
+inclusion check from primitives and reads only the published wire format. A second person
+could write their own verifier from
+[`verify/RECEIPT_FORMAT.md`](./verify/RECEIPT_FORMAT.md) and get the same verdict.
 
-## How it works
+```bash
+git clone https://github.com/juandifers/signet-runtime.git
+cd signet-runtime
+
+# no install needed — verify.py is stdlib-only and imports nothing from Signet
+python3 verify/verify.py verify/testdata/exfil_deny.json \
+  --anchor "$(cat verify/testdata/anchor.txt)"
+```
+
+Expected output:
+
+```
+VERIFIED
+  effect:    egress → https://attacker.example/collect
+  payload:   sha256:fc670d21…  (commitment only)
+  decision:  DENY
+  basis:     standing hard axis 'egress_destination' (not a learned rule)
+  inclusion: leaf 4 of tree size 6 → root 660d07c7…
+  anchor:    matches supplied root
+  claim:     this exact denied egress is recorded, unaltered, on the operator's STANDING fence
+```
+
+Two more fixtures ship alongside it — verify them the same way, adding `--allow` since they
+are ALLOW-mode receipts: `verify/testdata/legit_allow.json` (an ALLOW on an allowlisted host)
+and `verify/testdata/learned_basis.json` (a decision carried on a *learned* rule — the
+contrast to the standing fence).
+
+---
+
+## The idea
+
+A few mental models do all the work:
+
+- **Structural, not conventional.** A check the model can argue its way past is a bouncer;
+  a token-gated turnstile is not. The trusted decision lives *below* the model, in
+  deterministic code the model can't talk around.
+- **Bind the effect, not the tool.** The rail enforces *what the agent does* (egress to
+  this destination) rather than *which tool it called* — so a compromised agent can't
+  launder the action through a different path.
+- **Brain vs. muscle.** Making the agent decide well (the brain) and making the system
+  *incapable* of the wrong action when the brain is fooled (the muscle) are different jobs.
+  Safety lives in the muscle. This project is mostly muscle.
+- **Verifiable receipts.** A log you control is a diary; an RFC 6962 Merkle log whose root
+  is externally anchored is evidence — tamper-evident and checkable by a stranger with no
+  access to the runtime.
+- **The fence only tightens.** Per-task policy can only restrict standing policy, never
+  widen it, so the agent can never grant itself authority it didn't already have.
+
+**Live interactive demo:** [juandifers.github.io/signet-runtime](https://juandifers.github.io/signet-runtime)
+— one authorized action, six attacks, the unmodified kernel, across three rails. (The page is
+built and published from the [`demo`](https://github.com/juandifers/signet-runtime/tree/demo)
+branch, so it is not part of a `main` checkout.)
+
+---
+
+## What's built
+
+- A **rail-agnostic enforcement kernel** with a verifier pipeline (context-binding,
+  consume-once, monotonic policy narrowing).
+- An **egress rail** that decides network egress by destination against an operator
+  standing allow-set, with kernel token mint and consume-once.
+- A **policy-convergence loop** that turns repeated approvals into standing rules — so
+  routine work stops prompting — while a structural guard keeps learned rules strictly
+  inside the operator's fence (proven, not asserted in a comment).
+- **RFC 6962 receipts** and a **clean-room verifier** that depends on nothing but the
+  published format.
+- An **AgentDojo integration** that routes the agent's egress through a single chokepoint
+  and reports the benchmark's *native* utility and attack-success metrics.
+
+---
+
+## Architecture
+
+Signet is layers, and the boundaries between them are the point. A compromisable agent calls
+tools; an in-process **local gate** is defense-in-depth (not the boundary — the agent could
+write around it). The real decision happens *below the model*, in a **kernel** the agent
+holds no keys to: it runs an 11-step verify, binds the decision to the exact effect, mints a
+one-time signed token, and writes a verifiable receipt. **Rails** turn that token into a
+rail-specific capability by filling two hooks — they never touch the kernel — and an OS
+**sandbox** makes the egress only-door real.
 
 ```mermaid
-flowchart TD
-    OP["Operator — task mandate, frozen<br/>BEFORE any untrusted input"]:::trust
-    SP["Standing policy"]:::trust
-    OP --> FENCE["Effective fence = standing ∩ mandate<br/>(only ever narrows)"]:::trust
-    SP --> FENCE
+flowchart TB
+    AGENT["AI agent — compromisable"]
+    GATE["Local gate · in the agent's own process<br/>PreToolUse · deterministic · offline · signed receipts<br/><i>defense-in-depth, NOT the boundary</i>"]
+    KERNEL["Enforcement kernel · separate principal, no keys in the agent<br/>11-step verify · context-bind · consume-once · enforcer-signed token"]
+    RAILS["Rails — fill 2 hooks only, never edit the kernel<br/>egress · supabase · xrpl · mpc"]
+    SANDBOX["OS sandbox · netns + veth + nftables + unprivileged exec<br/>makes the egress only-door real"]
+    RECEIPT[("RFC 6962 receipt log<br/>externally anchored · clean-room verifiable")]
 
-    subgraph AGENTBOX["Agent host — assume the model is compromised"]
-        AGENT["Agent — quarantined LLM + the code it writes<br/>holds NO standing credential"]:::untrust
-        LG["Local gate · signet hook<br/>defense-in-depth, NOT the boundary"]:::soft
-    end
-    AGENT -. guarded by .-> LG
-
-    subgraph BROKERBOX["Broker — separate OS principal, holds the keys"]
-        KERNEL["Kernel Verifier · 11 checks · context-bind<br/>consume-once on chain_hash · signed one-time token"]:::core
-        TMPL["Authorizer template<br/>recheck effect ∈ fence → produce capability"]:::core
-        KERNEL --> TMPL
-    end
-
-    AGENT ==>|"capability request<br/>(effect + bound params)"| KERNEL
-    FENCE --> TMPL
-    TMPL -->|granted| RCPT["signed receipt"]:::rcpt
-    TMPL -->|refused| REJ["ConsideredRejected<br/>signed deny receipt"]:::rcpt
-
-    TMPL ==>|"DB rail · FREE only-door"| JWT["scoped, short-lived JWT"]:::cap
-    JWT ==> PG["Postgres + RLS<br/>enforces the scope"]:::ext
-    TMPL ==>|"egress rail · OS-interposition"| PROXY["inline proxy<br/>admit + forward verbatim"]:::cap
-    PROXY ==> NET["upstream host:port"]:::ext
-
-    NETNS["netns sandbox · EGRESS-SOLE-PATH<br/>agent unprivileged · sole route out = the proxy"]:::os
-    NETNS -. forces all egress through .-> PROXY
-
-    classDef trust fill:#e6f4ea,stroke:#34a853,color:#111;
-    classDef untrust fill:#fce8e6,stroke:#ea4335,color:#111;
-    classDef core fill:#e8f0fe,stroke:#4285f4,color:#111;
-    classDef cap fill:#fef7e0,stroke:#f9ab00,color:#111;
-    classDef ext fill:#f1f3f4,stroke:#9aa0a6,color:#111;
-    classDef rcpt fill:#f3e8fd,stroke:#a142f4,color:#111;
-    classDef os fill:#e0f7fa,stroke:#00acc1,color:#111;
-    classDef soft fill:#ffffff,stroke:#9aa0a6,stroke-dasharray:5 5,color:#111;
+    AGENT -->|tool call| GATE
+    GATE -->|"the boundary lives below"| KERNEL
+    KERNEL --> RAILS
+    RAILS --> SANDBOX
+    KERNEL -->|every decision| RECEIPT
+    SANDBOX -.->|enforced egress path| RECEIPT
 ```
 
-The agent holds nothing it can authenticate with; it can only *ask*. The broker —
-a separate OS principal — runs the unchanged kernel verifier and authorizer
-template against the frozen fence, then hands out one of two only-door shapes: a
-**scoped credential** the resource itself enforces (the *free* DB pattern) or an
-**inline-admitted connection** through a proxy the netns makes unavoidable (the
-*OS-interposition* egress pattern). Every outcome, granted or refused, leaves a
-signed receipt. The in-process local gate is drawn dashed on purpose: it is
-defense-in-depth, not the boundary. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for
-the per-rail request paths.
+The deliberate seam: the **rail and eval layers are editable; the kernel hot path is fenced.**
+Adding a rail has never required touching the kernel (tracked as `core_kernel_edits_zero`,
+0/10, against a pinned byte-baseline). Full layer map, the pipeline order and why it's
+load-bearing, and the OS-interposition rails: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
-## What exists — the honest status map
+---
 
-This is the scorecard discipline applied to prose. Every component carries two
-labels — **maturity** (how built/verified it is) and **boundary strength** (how
-strong a containment claim it actually supports) — and a test that backs it. We
-publish the advisory and out-of-scope rows on purpose; most products don't.
+## Status & scope
 
-| Component | Maturity | Boundary strength | Traceable to |
-|---|---|---|---|
-| Kernel verifier — 11 checks, context-binding, consume-once on `chain_hash`, signed tokens | built + CI-tested | substrate (N/A) | `tests/test_attacks.py` (21 attacks); `core_kernel_edits_zero` 0/10 |
-| Authorizer template — `verify_token → recheck_against_context → produce_capability` | built + CI-tested | substrate (N/A) | `test_broker_egress.py::test_egress_authorizer_fills_only_two_hooks` |
-| **Credential rail — Supabase Postgres (keyholder)** | built + CI-tested | **boundary** when zero-standing-cred holds; **advisory** if a standing credential leaks | boundary: `test_broker_supabase.py::test_07…`; advisory: `…::test_09_NEGATIVE…`; RLS scope: `…::test_06…` |
-| **Broker** — multi-surface: unix-socket issuer RPC + inline egress proxy, one core | built + CI-tested | substrate; separate OS principal | `test_broker_supabase.py::test_unix_socket_refuses_to_start_when_agent_is_broker_uid` |
-| **Egress rail — broker-as-proxy** (destination-bound, trusted DNS, no payload inspection) | built + CI-tested | **boundary** when the netns is present; **advisory** without it | advisory: `test_broker_egress.py::test_08_NEGATIVE…`; boundary: `test_netns_egress.py` |
-| **netns sandbox — `EGRESS-SOLE-PATH`** (agent unprivileged inside; controller holds netns) | built + privilege-gated-verified (Linux, `CAP_NET_ADMIN`) | **boundary** under that deployment | `test_netns_egress.py` (skips cleanly in CI — a *measurement*, not a CI invariant) |
-| Rail-bridge rails — GitHub merge / deploy / infra-apply (the origin) | built + CI-tested | boundary **via the server-side hard rail** (advisory until the required-check is configured) | `rail_conformance` 3/3; `red_team_breakout_zero` |
-| Signed, hash-chained local receipts | built + CI-tested | tamper-**evident** (independently verifiable from `record + key`) | `test_broker_supabase.py::test_capability_independently_verifiable_without_broker` |
-| Local gate — `signet hook` + `signet attack-me` (Stage 1/2) | built + CI-tested | **defense-in-depth — NOT a boundary** | `tests/test_local_fence.py` (14); `tests/test_attack_me.py` (7) |
-| **Egress containment, measured — live LLM on AgentDojo** (attack-success 60%→0%, utility held, every block clean-room-verified) | built + measured (opt-in live run) | boundary logic exercised end-to-end via the eval chokepoint; production proxy + netns pending | `tests/test_egress_agentdojo.py`; report: `evals/agentdojo/EGRESS_CONTAINMENT_RUN.md` |
-| Output/emission containment (the link-preview exfil variant) | designed — out of scope | N/A | DESIGN.md egress §; `test_broker_egress.py::test_09c…` |
-| Exfil through an *allowlisted* destination (binding is *where*, not *what*) | out of scope by design | N/A | `test_broker_egress.py::test_09a…` |
-| Immutable receipt anchor (S3 Object-Lock / Rekor) | planned | N/A | — |
-| Rootless sandbox · broker key custody · agent-sandbox launcher · onboarding | planned | N/A | — |
-| Full-sandbox containment (a genuinely autonomous agent inside the netns, exfil blocked by the OS — not the eval harness) | planned (the measured eval-chokepoint version above is the first step) | N/A | — |
+Kept deliberately honest, which is the point.
 
-Reading the map: a **boundary** is enforced structurally; **advisory** means the
-logic is real and tested but a precondition (zero-standing-cred, or the netns)
-must hold for it to contain — and a negative test proves the bypass succeeds when
-the precondition is removed (DESIGN.md **P8**, honest containment scope).
+- **Proven (invariants, asserted in tests):** egress to a destination outside the standing
+  allow-set is always denied and always emits a verifiable standing-fence receipt; learned
+  rules can only restrict standing policy; the block is the receipt (no re-derivation).
+- **Measured (this corpus, this model — not guarantees):** 60% baseline compromise rate;
+  0% exfiltration success with the rail on the compromised runs; utility preserved.
+- **Prototype / not done:** wiring the enforcement into the production proxy; payload-aware
+  binding (today it binds destination, not content); rails for other effect classes
+  (email, payments); the live-agent enforced demo; a CI workflow.
 
-## What it looks like — the 60-second on-ramp
+---
 
-The fastest way to see Signet is the **local gate**, the Stage 1/2 product
-surface. It is defense-in-depth and a demo on-ramp — *not* the enforcement
-boundary (that is the broker). It contains a cooperating coding agent behind a
-deterministic, offline, LLM-free PreToolUse fence and writes a signed,
-hash-chained receipt for every decision:
+## Where this sits
 
-```bash
-pipx install signet-runtime        # or: pip install -e ".[dev]"
-signet init                        # writes .signet/policy.yaml + wires the PreToolUse hook
-signet attack-me                   # drive hostile tool calls through the REAL gate
-```
-
-```
-ACT 1  edit signet/verifier.py        -> DENIED   (protected path)   receipt ldr_…  ✓ signed
-ACT 2  write .env with a secret       -> DENIED   (protected path)   receipt ldr_…  ✓ signed
-ACT 3b bare `git push` to main        -> the honest gap: a path-inspector can't see the effect
-…
-signet receipts --verify              -> chain + signatures intact
-```
-
-`signet attack-me` is also the proof of the keyholder thesis: ACT 3b is the
-bare-push gap that no command inspector can close — which is *why* the boundary
-must be a held key, not a watched command. See [`LOCAL_GATE.md`](./LOCAL_GATE.md).
-
-## Does it actually hold? A live agent, measured
-
-It's easy to claim *"when the model is fooled, the damage still can't happen."*
-It's harder to show it — so we did. We took
-[AgentDojo](https://github.com/ethz-spylab/agent-dojo), an academic
-prompt-injection benchmark, and ran a real model (`gpt-4o-mini`) through its Slack
-task suite while live injections tried to smuggle a secret out to an attacker's
-URL. The scoring is **AgentDojo's own** attack-success measure, not a metric we
-invented. We ran it twice on the same tasks: once with the egress rail watching
-but not enforcing — to *measure* the baseline rather than assume it — and once with
-it enforcing.
-
-| | rail off | rail on |
-|---|---|---|
-| **attack succeeds** (the secret leaves) | **60%** — the injections genuinely worked | **0%** — every attempt blocked |
-| **task still completed** (legitimate work) | 80% | 80% — no regression |
-
-The rail only gets credit where the model was actually fooled: 6 of the 10 attacks
-landed without it, and it stopped all 6. The other 4 the model refused on its own —
-those don't exercise the rail, so we report them separately and don't count them.
-
-And the blocks are more than blocked — they're auditable. Each one wrote a signed
-receipt, and 15 of 15 we sampled re-verified from scratch using a standalone
-checker that **can't even import Signet's code** — so the evidence doesn't depend on
-trusting the system that produced it.
-
-**Where this sits, honestly.** This exercises the real decision logic end-to-end
-against a live, compromisable model on a public benchmark — not a staged demo. It
-runs through the evaluation-layer chokepoint (the same logic the production proxy
-uses), not yet the OS-level sandbox; and because the rail keys on *destination*,
-exfil through an already-trusted host is out of scope by design (see the threat
-model). Full numbers and provenance:
-[`evals/agentdojo/EGRESS_CONTAINMENT_RUN.md`](./evals/agentdojo/EGRESS_CONTAINMENT_RUN.md).
-
-```bash
-python -m evals.agentdojo.egress_run --selftest          # offline wiring check — no API key, no spend
-python -m evals.agentdojo.egress_run --model gpt-4o-mini --max-pairs 10   # the live paired run
-```
-
-## Threat model
-
-**In scope (enforced or contained-when-fooled):** replay (same- and
-cross-context), recipient/destination substitution, amount tampering, cart/plan
-substitution, chain-linkage breaks, expired or revoked mandates, currency
-substitution, split/structuring via velocity, caps and allow-lists,
-human-approval thresholds, agent-initiated egress to non-allowlisted destinations
-(incl. raw-IP and poisoned-DNS evasion), reaching a brokered resource without a
-capability, and delayed (dwell-time) injection firing on a later turn.
-
-**Out of scope by design (documented, not hidden):** a prompt injection that
-produces a fully self-consistent, correctly-signed *legitimate-looking* chain
-(mitigated upstream — human-present thresholds at signing time); principal key
-compromise; agent–merchant collusion; **exfil through an allowlisted destination**
-and the **link-preview emission variant** (the binding is *where*, not *what* —
-these need an output/emission rail, see roadmap); deep DNS-label tunneling.
-Overclaiming containment here would be a violation on par with a fabricated test.
-
-## How it's organized
-
-A rail-agnostic **kernel** decides whether an effect is authorized and mints a
-signed one-time token; a **rail** turns that token into a rail-specific capability
-by filling exactly two hooks of the authorizer template — the kernel never learns
-what a rail is, proven by `core_kernel_edits_zero` 0/10 across every rail. The
-**broker** exposes that template over a transport in two shapes: an issuer (the
-DB rail mints a scoped credential the resource itself enforces — a *free*
-only-door) and an inline proxy (the egress rail is issuer *and* enforcer on the
-data path — an *OS-interposition* only-door). The **sandbox** is the OS layer that
-makes the egress only-door real. See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for
-the layer map and the two request-path shapes, and [`DESIGN.md`](./DESIGN.md) for
-the principles (P1–P9), including the **free-vs-OS-interposition classifier** that
-predicts, in advance, which rails are cheap boundaries and which need OS help.
-
-## Roadmap (planned — none of this is claimed as working)
-
-- **The full-sandbox containment demo** — the egress rail is now *measured*
-  against a live, compromisable model on AgentDojo (see *A live agent, measured*
-  above); the step that remains is the same result with a genuinely autonomous
-  agent inside the netns sandbox, where the OS — not the eval harness — makes the
-  proxy the only way out. (The agent-*initiated* case, **not** the link-preview
-  attack.)
-- **Productization** — making `EGRESS-SOLE-PATH` real beyond the privilege-gated
-  test (rootless netns), broker/controller hardening and key custody (the broker
-  is now the sole egress path *and* holds the keys — the highest-value target),
-  the agent-sandbox launcher as a packaged deployable, and a protect-my-repo
-  onboarding flow.
-- **Anchored receipts** — replace the local append-only stub with a real
-  immutable anchor (S3 Object-Lock / Rekor) to defeat equivocation across hosts.
-
-## History
-
-Signet began as a payment-mandate enforcer (an XRPL 2-of-2 / MPC co-signer
-holding the enforcer's key share) and a GitHub-merge rail-bridge with a
-quarantined, set-valued resolver (a CaMeL-style trusted-planner / quarantined-
-worker split, with a cardinality rule that escalates on ambiguity). That work is
-real and CI-tested — it is the "rail-bridge" archetype in the status map — but it
-is the *origin*, not the product. The product is the keyholder broker. The
-grounding it borrows: **AP2** (Agent Payments Protocol) for the mandate chain,
-**CaMeL** (Debenedetti et al., 2025) for the planner/worker split, **RFC 6962**
-(Certificate Transparency) for the receipt log, and selective-prediction work for
-the abstain-when-not-a-singleton rule.
-
-## Run / verify
-
-```bash
-pip install -e ".[dev]"            # kernel + broker + rails + local gate + test deps
-
-pytest -q                          # the full suite (the tests are the spec)
-python -m evals.scorecard          # invariants vs measurements; exit 1 on any invariant FAIL
-
-python -m demos.broker_supabase_demo   # DB rail: brokered scoped JWT vs leaked-DSN bypass (P8)
-python -m demos.broker_egress_demo     # egress rail: admit/refuse + the advisory-without-netns bypass
-
-python -m evals.agentdojo.egress_run --selftest   # AgentDojo containment: offline wiring check (no key)
-# the live paired run (needs an OpenAI key; capped, cached, cheap model by default):
-python -m evals.agentdojo.egress_run --model gpt-4o-mini --max-pairs 10
-
-# The egress OS boundary (Linux + CAP_NET_ADMIN only; skips cleanly elsewhere):
-SIGNET_NETNS_TEST=1 sudo -E python -m pytest tests/test_netns_egress.py -v
-```
-
-## Status of the primitives
-
-This is a research-grade reference implementation, labeled as one. The security
-properties are real and tested; several primitives are proof-of-concept and
-called out so you know what's a toy and what isn't — each is isolated to one file:
-
-- **Crypto** is Ed25519; AP2 verifiable credentials want ECDSA P-256
-  (`signet/crypto.py`).
-- **Canonicalization** is sorted-keys JSON; production wants RFC 8785 JCS
-  (`signet/canonical.py`).
-- **State** (consume-once, velocity) is single-process SQLite; production wants a
-  multi-instance atomic store (`signet/nonce.py`).
-- **The receipt anchor** is a local append-only log; production wants a real
-  immutable anchor (see roadmap).
-
-The kernel stays untouched across all of it: the full suite is green, CI makes no
-live LLM or network calls, and every rail runs on the same unmodified 10-file
-core.
+Signet is action-layer enforcement with verifiable audit — distinct from native agent
+controls (PreToolUse-style hooks), detection-based guardrails, and credential brokers. It's
+designed to complement, not compete with, the signed-mandate primitive in Google's AP2; its
+wedge is enforcement-and-evidence at deployment. The verifiable-receipt property maps
+directly onto the EU AI Act's Article 12 logging requirements.

@@ -27,13 +27,16 @@ chain executes once, in context, under policy — and anchors proof that it did.
 ## Run / verify
 
 ```bash
-pip install -e ".[dev]"          # pydantic, pynacl, xrpl-py, fastapi, pytest
+pip install -e ".[dev]"          # core (pydantic, pynacl, pyyaml) + test deps (pytest, hypothesis, xrpl-py, pyjwt, cryptography)
 pytest -v                        # 21 attack tests — these are the spec
 python -m demos.role2_demo       # rail-agnostic block/execute + receipt log
 python -m demos.role1_xrpl_demo  # XRPL 2-of-2: agent-alone fails quorum
 python -m demos.mpc_demo         # MPC 2-of-2 threshold: agent-alone can't sign
-uvicorn signet.api:app --reload  # HTTP surface at /docs
+uvicorn signet.api:app --reload  # HTTP surface at /docs   (needs the api extra: pip install -e ".[api]")
 ```
+
+Extras: `.[dev]` runs the full suite (the agentdojo eval skips cleanly without `.[eval]`).
+`.[api]` = fastapi/uvicorn for the HTTP surface; `.[eval]` = agentdojo for the egress run.
 
 **The tests are the specification.** Each test is one attack. Keep them green.
 When adding a defense, add the attack test that proves it first.

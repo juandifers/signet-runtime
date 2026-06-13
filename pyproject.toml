@@ -25,7 +25,12 @@ supabase = ["pyjwt[crypto]>=2.8", "cryptography>=41", "requests>=2.31"]
 # hypothesis is OPTIONAL: the conformance battery enumerates its adversarial output space with zero
 # deps; when hypothesis is present it ADDITIONALLY fuzzes random resolver outputs against the gate.
 # The Supabase rail crypto rides in dev so the offline broker-bypass battery runs in the suite.
-dev = ["pytest>=8", "hypothesis>=6", "pyjwt[crypto]>=2.8", "cryptography>=41"]
+# xrpl-py rides in dev so the 21-attack spec (tests/test_attacks.py) runs on the documented install.
+dev = ["pytest>=8", "hypothesis>=6", "pyjwt[crypto]>=2.8", "cryptography>=41", "xrpl-py>=4"]
+# The AgentDojo egress-containment eval (evals/agentdojo/*, tests/test_egress_agentdojo.py).
+# Heavy/academic dep, kept out of `dev`; the test SKIPS cleanly without it. Install to run the
+# offline `--selftest` plumbing and the opt-in live paired run.
+eval = ["agentdojo>=0.1.35"]
 # The LIVE GitHub rail-bridge (L3 manual test) — outbound to api.github.com only.
 # Not needed for the offline tests/demos; imported lazily by evals/github_railbridge/live_rail.py.
 l3-github = ["pyjwt[crypto]>=2.8", "requests>=2.31"]
