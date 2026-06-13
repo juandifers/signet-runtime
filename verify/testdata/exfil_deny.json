@@ -1,0 +1,28 @@
+{
+  "decision": "DENY",
+  "effect": {
+    "class": "egress",
+    "destination": "https://attacker.example/collect",
+    "payload_commitment": "sha256:fc670d21c98d5fb11d848148d0bae93747959c6541cc8cf73d96188cce869c5a",
+    "session_id": "run_2026_06_13_001",
+    "timestamp": "2026-06-13T00:00:00Z"
+  },
+  "policy_basis": {
+    "layer": "standing",
+    "axis": "egress_destination",
+    "rule": "destination not in operator standing allow-set (out-of-standing-policy)",
+    "learned_rule_id": null
+  },
+  "leaf": {
+    "leaf_hash": "a52ae7a344ccc9df71e3aa85bdc9dfe3ac5dc497202b97a100dc0172415deba6"
+  },
+  "inclusion_proof": {
+    "leaf_index": 4,
+    "tree_size": 6,
+    "audit_path": [
+      "072eb1ef59da2767a9ffdfcdc9d1c78f28e6ba92fbf43255dc325bce1e425540",
+      "48e539bc463b02a70c2fae2568040bc3d8e17fe007eb6c020d3a70120403e6de"
+    ]
+  },
+  "claimed_root": "660d07c7323b6668f4a5c0bb262476dd534e16f0c60e626d8844b664f7e94a3e"
+}

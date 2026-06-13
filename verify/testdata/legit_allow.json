@@ -1,0 +1,29 @@
+{
+  "decision": "ALLOW",
+  "effect": {
+    "class": "egress",
+    "destination": "api.supabase.internal:443",
+    "payload_commitment": "sha256:10e0ea6c552ea2c9e01b03229dbea0caafd8375c867200329bfc2b57145838cc",
+    "session_id": "run_2026_06_13_001",
+    "timestamp": "2026-06-13T00:00:00Z"
+  },
+  "policy_basis": {
+    "layer": "standing",
+    "axis": "egress_destination",
+    "rule": "destination within operator standing allow-set \u2229 task mandate",
+    "learned_rule_id": null
+  },
+  "leaf": {
+    "leaf_hash": "de3077ad8c045af9531acea719946a99001bce3e3c5fee7030404c44d69fdc81"
+  },
+  "inclusion_proof": {
+    "leaf_index": 0,
+    "tree_size": 6,
+    "audit_path": [
+      "ae5337554c50428aa983d84d3b9b48e5999a44ab56e448835cbdb1dd65edb1b3",
+      "04c9d562521070255c19c9f1c5f6a723396360c4e6c0bca1e96651ef93e39de3",
+      "b35cb1f140c3a24ac6c4d6ab83ce03765cb66d7a54ebbd19072e86dfa8ab99bc"
+    ]
+  },
+  "claimed_root": "660d07c7323b6668f4a5c0bb262476dd534e16f0c60e626d8844b664f7e94a3e"
+}
