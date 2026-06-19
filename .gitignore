@@ -9,4 +9,5 @@ __pycache__/
 
 # Generated demo output — CI rebuilds this from the kernel on the `demo` branch.
 docs/
+.claude/settings.local.json
 live_demo_specs.md

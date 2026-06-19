@@ -5,6 +5,20 @@ does, so flipping a tier or the velocity cap in the source moves the table; (b) 
 corpus has 0 wrong-resolution and every wrong endorsement bounded-to-own; (c) injection
 never endorses the attacker PR.
 """
+import pytest
+
+pytest.importorskip(
+    "agentdojo",
+    reason="agentdojo not installed — the corpus diagnostic needs the eval harness; "
+    "the production-path tests do not (see test_github_railbridge_isolation.py)",
+    # exc_type=ModuleNotFoundError: a genuinely-MISSING agentdojo skips, but a
+    # present-but-BROKEN one (raises a non-MNFE ImportError) PROPAGATES and fails the
+    # run. Fail-closed applies to test infra too — skipping a broken dep would mask a
+    # real environment problem. (Verified empirically: exc_type=ImportError would still
+    # skip a broken install silently; ModuleNotFoundError is what makes it fail loudly.)
+    exc_type=ModuleNotFoundError,
+)
+
 from evals.agentdojo.diagnostic import CORRECT, ESCALATE, WRONG
 from evals.agentdojo.gate import MODE_POLICY, MODE_PREDICATE, MODE_STRICT
 from evals.effect_core import ENDORSE, resolve_effect_predicate

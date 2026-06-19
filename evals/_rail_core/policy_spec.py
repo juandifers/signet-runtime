@@ -54,11 +54,40 @@ OWN = "own"
 UNTRUSTED = "untrusted"
 
 
+# ============================================================================
+# variability — does widening an axis require the operator (HARD), or may a learned
+# allow-rule open it within an operator-declared class (SOFT)?  This is the only
+# addition to the shared policy model the policy-convergence loop needs; the shared
+# EVALUATOR (`_holds` / `evaluate_*`) is deliberately left untouched. Missing/unknown
+# variability is treated as HARD (fail safe: an axis is never silently learnable).
+# ============================================================================
+HARD = "hard"
+SOFT = "soft"
+_VARIABILITY = (HARD, SOFT)
+
+
+def normalize_variability(v) -> str:
+    """Fail safe: anything that is not EXACTLY SOFT collapses to HARD."""
+    return SOFT if v == SOFT else HARD
+
+
 @dataclass(frozen=True)
 class AttrDecl:
     name: str
     kind: AttrKind
     provenance: str = OWN
+    variability: str = HARD          # hard => operator-only widening; soft => learnable within a class
+
+    def __post_init__(self):
+        # normalize fail-safe without breaking frozen-ness (and without touching existing callers,
+        # which simply omit the field and inherit HARD).
+        object.__setattr__(self, "variability", normalize_variability(self.variability))
+
+
+def axis_variability(schema) -> Dict[str, str]:
+    """Map each declared axis name -> its (normalized) variability. The convergence generalizer
+    reads ONLY this — an undeclared/missing axis is HARD, so it is never opened by a learned rule."""
+    return {d.name: normalize_variability(getattr(d, "variability", HARD)) for d in schema}
 
 
 # A CandidateSchema is just a tuple of AttrDecls (every attribute the policy may read).

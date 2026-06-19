@@ -1,0 +1,16 @@
+{
+  "session_id": "1116e1a4-1ecd-4848-bc8d-1a2cf2378522",
+  "transcript_path": "/Users/jd/.claude/projects/-private-tmp-signet-hook-capture/1116e1a4-1ecd-4848-bc8d-1a2cf2378522.jsonl",
+  "cwd": "/private/tmp/signet-hook-capture",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/private/tmp/signet-hook-capture/hello.txt",
+    "content": "hi"
+  },
+  "tool_use_id": "toolu_01LYdTWtAMAUibiBXQVedunH"
+}

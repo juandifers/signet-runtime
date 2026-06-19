@@ -68,6 +68,21 @@ def main() -> int:
     lg_path = ROOT / "demos" / "live_github_result.json"
     if lg_path.exists():
         trace["live_github"] = json.loads(lg_path.read_text())
+    # GENERATED at build time by running the REAL hermetic LangGraph injected-agent demo through
+    # the unmodified kernel/interceptor path — a contained orchestrator story + signed receipt +
+    # RFC-6962 inclusion proof. Gated on `langgraph` being installed (mirror A8): if absent the
+    # page simply omits the Orchestrator tab's data. The proof bundle is also written next to the
+    # page so the "verify it yourself" command works on a fresh clone.
+    try:
+        from demos.langgraph_merge_demo import build_trace as build_langgraph_trace
+        lg = build_langgraph_trace()
+        trace["langgraph"] = lg
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        (OUT_DIR / "langgraph_receipt.json").write_text(
+            json.dumps(lg["bundle"], indent=2, default=str))
+    except ImportError as e:
+        print(f"  (langgraph trace skipped: {e} — install `langgraph` to include the "
+              "Orchestrator tab)")
     # Stamp the build so the page can show its own provenance.
     trace["built_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     trace["built_from"] = _git_sha()

@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       # The three demoed rails need only the core kernel deps (no xrpl/fastapi).
-      - run: pip install pydantic pynacl
+      - run: pip install pydantic pynacl pyyaml langgraph
       - run: python -m demos.build_demo
       - uses: actions/upload-pages-artifact@v3
         with:

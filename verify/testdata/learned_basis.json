@@ -1,0 +1,29 @@
+{
+  "decision": "ALLOW",
+  "effect": {
+    "class": "egress",
+    "destination": "api.supabase.internal:443",
+    "payload_commitment": "sha256:c575ca731d2119a37ce187e1c2943c64fad0e6375e82c32ff09866955d282569",
+    "session_id": "run_2026_06_13_001",
+    "timestamp": "2026-06-13T00:00:00Z"
+  },
+  "policy_basis": {
+    "layer": "learned",
+    "axis": "command_class",
+    "rule": "admitted by a learned allow-rule (soft axis within its operator-declared class)",
+    "learned_rule_id": "lr_egress_softclass"
+  },
+  "leaf": {
+    "leaf_hash": "9f40ac8a23f16cb09080c99e087588dbeb324f9e8cda26702c5cf5b4474ed7d5"
+  },
+  "inclusion_proof": {
+    "leaf_index": 3,
+    "tree_size": 6,
+    "audit_path": [
+      "a1b22d4faad9a04cdca6da8373d1a19eeea03108a489edaa1c027c73d55f020c",
+      "f1d997fecd4f4427ff2945ab441a6ad6cac4d9e9da51f9e5d3de947596f77dee",
+      "b35cb1f140c3a24ac6c4d6ab83ce03765cb66d7a54ebbd19072e86dfa8ab99bc"
+    ]
+  },
+  "claimed_root": "660d07c7323b6668f4a5c0bb262476dd534e16f0c60e626d8844b664f7e94a3e"
+}

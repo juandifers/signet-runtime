@@ -1,0 +1,48 @@
+# .signet/policy.yaml — local containment fence for coding agents (schema v1).
+# Evaluated by `signet hook` (a Claude Code PreToolUse hook): deterministic, offline,
+# no LLM. This local gate is containment UX + tamper-evident receipts — it is NOT the
+# enforcement boundary; the server-side rail (Stage 3) is. `signet explain <path>`
+# shows exactly which rule fires.
+#
+# This repo dogfoods its own product. Crown jewels (signet/**, evals/scorecard/**)
+# were added by hand: the init heuristics propose dir-name matches (auth/infra/...)
+# and cannot know a project's domain-specific sensitive code.
+version: 1
+repo: juandifers/signet-runtime
+  protect:
+  - signet/verifier.py     # the 10 frozen kernel files (unchanged)
+  - signet/chain.py
+  - signet/models.py
+  - signet/policy.py
+  - signet/nonce.py
+  - signet/revocation.py
+  - signet/receipts.py
+  - signet/builder.py
+  - signet/crypto.py
+  - signet/canonical.py
+  - signet/authorizers/**  # existing rail authorizers — do not edit
+  - signet/cli/**          # the gate CLI
+  - signet/api.py
+  - evals/scorecard/**
+  - .github/workflows/**
+  - mandates/**
+  - "*.pem"
+  - ".env*"
+  - "**/.env*"
+  # signet/broker/** and signet/rails/** intentionally OMITTED for this build;
+  # re-add `signet/**` (and drop these line items) once the slice is green.
+allow:
+- '**'
+branches:
+  protected:
+  - main
+bash:
+  deny:
+  - '*git push*--force*'
+  - '*gh pr merge*'
+  - '*terraform apply*'
+  - '*git push*origin*main*'
+  ask: []
+tiers:
+  protected_edit: deny
+  out_of_allow_edit: ask

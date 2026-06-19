@@ -1,6 +1,16 @@
 {
-    "attribution": {
-      "commit": "",
-      "pr": ""
-    }
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "deny": [
+      "Edit(.signet/**)",
+      "Write(.signet/**)",
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.local.json)",
+      "Write(.claude/settings.local.json)"
+    ]
   }
+}

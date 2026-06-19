@@ -5,7 +5,13 @@ Run: pytest -v
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from xrpl.wallet import Wallet
+
+# xrpl-py rides in the `dev` extra; skip cleanly (don't crash collection) if someone
+# installed bare core. `pip install -e ".[dev]"` runs the full 21-attack spec.
+Wallet = pytest.importorskip(
+    "xrpl.wallet",
+    reason="xrpl-py not installed — run: pip install -e '.[dev]'",
+).Wallet
 
 from signet.builder import make_env, build_chain
 from signet.authorizers.mock_broker import MockCredentialBroker
