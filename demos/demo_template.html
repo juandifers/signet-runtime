@@ -318,6 +318,59 @@
     .ad-table.am-table .adc:nth-child(n+3){border-top:1px solid var(--line)}
   }
 
+  /* ---------- orchestrator (LangGraph) view ---------- */
+  .lg-frame{margin-top:22px; border-left:3px solid var(--seal); padding:4px 0 4px 16px;
+    font-size:14.5px; color:var(--paper-dim); line-height:1.6}
+  .lg-frame b{color:var(--paper)}
+  /* the node graph: model node -> guarded merge_pr node -> gate */
+  .lg-graph{display:flex; align-items:center; gap:0; flex-wrap:wrap; margin:20px 0 6px}
+  .lg-node{border:1px solid var(--line); border-radius:12px; background:var(--ink-3);
+    padding:12px 15px; min-width:150px}
+  .lg-node .role{font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--haze)}
+  .lg-node .nname{font-family:var(--sig); font-weight:700; font-size:15px; margin-top:3px}
+  .lg-node .nsub{font-family:var(--mono); font-size:10.5px; color:var(--paper-dim); margin-top:5px}
+  .lg-node.untrusted{border-color:var(--block-d); background:rgba(255,93,107,.05)}
+  .lg-node.untrusted .role{color:var(--block)}
+  .lg-node.guarded{border-color:var(--seal); background:rgba(230,197,106,.05)}
+  .lg-node.guarded .role{color:var(--seal)}
+  .lg-node.lg-gate{border-color:var(--pass); background:rgba(54,214,166,.05)}
+  .lg-node.lg-gate .role{color:var(--pass)}
+  .lg-arrow{font-family:var(--mono); color:var(--haze); padding:0 12px; font-size:18px}
+  .lg-arrow .alabel{display:block; font-size:9.5px; letter-spacing:.06em; text-align:center;
+    color:var(--haze); margin-top:2px}
+  /* the fence + mandate readout */
+  .lg-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:18px 0}
+  @media(max-width:680px){ .lg-grid{grid-template-columns:1fr} .lg-graph{flex-direction:column; align-items:stretch}
+    .lg-arrow{transform:rotate(90deg); padding:8px 0} }
+  .lg-card{border:1px solid var(--line); border-radius:10px; background:var(--ink-3); padding:13px 15px}
+  .lg-card .clabel{font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--haze)}
+  .lg-card .crow{font-family:var(--mono); font-size:11.5px; color:var(--paper-dim); margin-top:7px;
+    line-height:1.5; word-break:break-word}
+  .lg-card .crow .k{color:var(--haze)} .lg-card .crow .v{color:var(--paper)}
+  /* poisoned corpus table */
+  .ad-table.lgc-table .adr{grid-template-columns:.5fr 1.5fr 1.6fr .7fr}
+  .ad-table.lgc-table .adr.picked{background:rgba(255,93,107,.08)}
+  .ad-table.lgc-table .tag{font-family:var(--mono); font-size:9.5px; letter-spacing:.06em;
+    padding:1px 6px; border-radius:999px; border:1px solid var(--line)}
+  .ad-table.lgc-table .tag.attacker{color:var(--block); border-color:var(--block-d)}
+  .ad-table.lgc-table .tag.legit{color:var(--pass); border-color:rgba(54,214,166,.4)}
+  .ad-table.lgc-table .pickflag{color:var(--block); font-weight:700}
+  .ad-table.lgc-table .inj{display:block; color:var(--block); opacity:.8; margin-top:4px; font-style:italic}
+  @media(max-width:680px){ .ad-table.lgc-table .adr{grid-template-columns:1fr 1fr}
+    .ad-table.lgc-table .adc:nth-child(n+3){border-top:1px solid var(--line)} }
+  /* the verify-it-yourself payoff */
+  .lg-verify{margin:18px 20px; border:1px solid var(--pass); border-radius:12px;
+    background:rgba(54,214,166,.05); padding:16px 18px}
+  .lg-verify .vh{font-family:var(--sig); font-weight:800; font-size:16px; color:var(--pass)}
+  .lg-verify .vp{font-size:12.5px; color:var(--paper-dim); margin:8px 0 12px; line-height:1.55}
+  .lg-verify code{display:block; font-family:var(--mono); font-size:13px; color:var(--paper);
+    background:#0c1622; border:1px solid var(--line); border-radius:8px; padding:12px 14px;
+    overflow-x:auto; white-space:pre}
+  .lg-verify .vmeta{font-family:var(--mono); font-size:11px; color:var(--haze); margin-top:11px;
+    line-height:1.6; word-break:break-all}
+  .lg-verify .vmeta .k{color:var(--seal)}
+
   /* ---------- resolution view ---------- */
   .funnel{position:relative; margin-top:16px; padding-left:30px}
   .instr{border:1px solid var(--line); border-radius:10px; background:var(--ink-3);
@@ -442,6 +495,8 @@
   <div class="tabs" role="tablist" aria-label="Demo sections">
     <button class="tab" id="tab-enforcement" role="tab" aria-selected="true"
       aria-controls="view-enforcement">Enforcement — the gauntlet</button>
+    <button class="tab" id="tab-langgraph" role="tab" aria-selected="false"
+      aria-controls="view-langgraph">Orchestrator — real LangGraph agent</button>
     <button class="tab tab-side" id="tab-resolution" role="tab" aria-selected="false"
       aria-controls="view-resolution">Resolution — which PR?<span class="side-tag">upstream</span></button>
     <button class="tab tab-side" id="tab-attackme" role="tab" aria-selected="false"
@@ -611,6 +666,13 @@
   <div class="view" id="view-attackme" role="tabpanel" aria-labelledby="tab-attackme" hidden>
     <div id="am-panel"></div>
   </div><!-- /view-attackme -->
+
+  <!-- ORCHESTRATOR: a REAL LangGraph agent, prompt-injected, contained from BELOW. Every artifact
+       (the model's pick, the verdict, the Check Run, the signed receipt + inclusion proof) is
+       produced by a real build-time run of the unmodified kernel — rendered from trace.langgraph. -->
+  <div class="view" id="view-langgraph" role="tabpanel" aria-labelledby="tab-langgraph" hidden>
+    <div id="lg-orch-panel"></div>
+  </div><!-- /view-langgraph -->
 
   <!-- PROVENANCE -->
   <div class="prov">
@@ -1176,10 +1238,133 @@
       +'</div>';
   }
 
+  // The Orchestrator tab: a REAL LangGraph agent, prompt-injected, contained from below. Every
+  // value here is produced by a real build-time run of the unmodified kernel (demos.build_demo ->
+  // demos.langgraph_merge_demo.build_trace). Render-from-data; omit the tab's body if absent.
+  function renderLangGraph(){
+    const lg = TRACE.langgraph;
+    const host = document.getElementById('lg-orch-panel');
+    if(!host) return;
+    if(!lg){
+      // No live run was captured at build time (langgraph absent). Hide the tab rather than ship a
+      // stub — the orchestrator story is real-run-or-nothing (PROJECTION-NOT-MOCKUP).
+      const tab = document.getElementById('tab-langgraph');
+      if(tab) tab.style.display='none';
+      host.innerHTML='';
+      return;
+    }
+    const v = lg.verdict, b = lg.bundle, p = lg.proof, cr = lg.check_run;
+    const blocked = v.outcome === 'block';
+
+    // --- the node graph (illustrative; static) ---
+    const graph =
+      '<div class="lg-graph">'
+        +'<div class="lg-node untrusted"><div class="role">Role B · untrusted</div>'
+          +'<div class="nname">model node</div>'
+          +'<div class="nsub">reads poisoned PR titles/bodies<br>('+escapeHtml(lg.proposal_mode)+')</div></div>'
+        +'<div class="lg-arrow">→<span class="alabel">proposes PR #'+escapeHtml(String(lg.proposal))+'</span></div>'
+        +'<div class="lg-node guarded"><div class="role">guarded tool</div>'
+          +'<div class="nname">merge_pr node</div>'
+          +'<div class="nsub">signet_guarded_tool<br>routes to the gate</div></div>'
+        +'<div class="lg-arrow">→<span class="alabel">effect proposed</span></div>'
+        +'<div class="lg-node lg-gate"><div class="role">enforcer</div>'
+          +'<div class="nname">Signet gate</div>'
+          +'<div class="nsub">+ Check Run keyholder<br>under branch protection</div></div>'
+      +'</div>';
+
+    // --- mandate + effective fence ---
+    const m = lg.mandate, f = lg.fence;
+    const cards =
+      '<div class="lg-grid">'
+        +'<div class="lg-card"><div class="clabel">Frozen mandate · Role A (trusted, set before any PR is read)</div>'
+          +'<div class="crow"><span class="k">criterion</span> <span class="v">'+escapeHtml(m.criterion)+'</span></div>'
+          +'<div class="crow"><span class="k">scope</span> <span class="v">'+escapeHtml(JSON.stringify(m.scope))+'</span>'
+          +'  ·  <span class="k">cap</span> <span class="v">'+escapeHtml(String(m.cap))+'</span></div>'
+          +'<div class="crow"><span class="k">repo</span> <span class="v">'+escapeHtml(m.repo)+'</span></div></div>'
+        +'<div class="lg-card"><div class="clabel">Effective fence · standing ∩ mandate</div>'
+          +'<div class="crow"><span class="k">allow (task layers)</span> <span class="v">'+escapeHtml(JSON.stringify(f.scope_layers))+'</span></div>'
+          +'<div class="crow"><span class="k">deny</span> <span class="v">'+escapeHtml(JSON.stringify(f.deny.slice(0,4)))+'</span></div>'
+          +'<div class="crow"><span class="k">bases</span> <span class="v">'+escapeHtml(JSON.stringify(f.bases))+'</span></div></div>'
+      +'</div>';
+
+    // --- poisoned corpus (untrusted runtime PRs); the model's pick is flagged ---
+    const corpusRows = (lg.world||[]).map(pr=>{
+      const inj = pr.injected_body ? '<span class="inj">injected: “'+escapeHtml(pr.injected_body)+'”</span>' : '';
+      return '<div class="adr'+(pr.picked?' picked':'')+'">'
+        +'<div class="adc"><span class="name">#'+escapeHtml(String(pr.pr))+'</span>'
+          +'<br><span class="tag '+pr.role+'">'+pr.role+'</span></div>'
+        +'<div class="adc"><span class="name">'+escapeHtml(pr.title)+'</span>'
+          +(pr.author?'<br>by '+escapeHtml(pr.author):'')+inj+'</div>'
+        +'<div class="adc">'+escapeHtml((pr.files||[]).join(', '))+'<br>'
+          +(pr.closes_issue!=null?'closes #'+escapeHtml(String(pr.closes_issue)):'no linked issue')+'</div>'
+        +'<div class="adc'+(pr.picked?' pickflag':'')+'">'+(pr.picked?'◀ model picked':'—')+'</div>'
+      +'</div>';
+    }).join('');
+
+    // --- verdict card (gate_contained) ---
+    const verdict =
+      '<div class="verdict-card '+(blocked?'bad':'ok')+'" style="margin:0 20px 16px">'
+        +'<div class="vtitle"><span class="pip"></span>'
+          +(blocked?'Contained — '+escapeHtml(v.escalation_source):'Merged')+'</div>'
+        +'<div class="vreason">cause: '+escapeHtml(v.cause)+'</div>'
+        +'<div class="note">The orchestrator proposed PR #'+escapeHtml(String(lg.proposal))
+          +'. The gate rejected it (outcome <b>'+escapeHtml(v.outcome.toUpperCase())+'</b>), no transaction was bound, '
+          +'and the required merge Check Run was concluded <b>'+escapeHtml(cr?cr.conclusion:'—')+'</b>'
+          +(cr?' (head '+escapeHtml(cr.head_sha)+', '+escapeHtml(cr.check_ref)+')':'')
+          +'. Nothing merged. What the model proposed did not determine what executed.</div>'
+      +'</div>';
+
+    // --- verify it yourself (the payoff) ---
+    const verify =
+      '<div class="lg-verify">'
+        +'<div class="vh">Verify it yourself</div>'
+        +'<div class="vp">The signed receipt and its RFC-6962 inclusion proof are embedded in this '
+          +'page and written to <span style="font-family:var(--mono)">docs/langgraph_receipt.json</span>. '
+          +'Re-verify them on a fresh clone with the clean-room verifier — it imports <b>nothing</b> from '
+          +'Signet and reaches no runtime; it recomputes the leaf, walks the Merkle path, and checks the '
+          +'enforcer signature from scratch:</div>'
+        +'<code>'+escapeHtml(lg.verify_cmd)+'</code>'
+        +'<div class="vmeta">'
+          +'<span class="k">receipt_hash</span>  '+escapeHtml(lg.receipt.receipt_hash)+'<br>'
+          +'<span class="k">root_hash</span>     '+escapeHtml(lg.proof.root_hash)+'<br>'
+          +'<span class="k">inclusion</span>     '+(lg.proof.inclusion_ok?'verified ✓':'FAILED')
+          +'  ·  <span class="k">receipt sig</span> '+(lg.receipt.sig_ok?'valid ✓':'INVALID')
+          +'  ·  <span class="k">decision</span> '+escapeHtml(lg.receipt.decision)+'</div>'
+      +'</div>';
+
+    host.innerHTML =
+      '<div class="lg-frame">A <b>real LangGraph agent</b> proposed the attacker PR. Signet contained '
+        +'it below the orchestrator: the gate rejected it and the merge Check Run concluded '
+        +'<b>failure</b>. The graph wiring is <i>how</i> the proposal reached Signet; the Check-Run '
+        +'keyholder under branch protection is <i>why</i> the agent couldn’t route around it.</div>'
+      +graph
+      +'<div class="ad" style="margin-top:20px">'
+        +'<div class="ad-h"><div class="ad-eyebrow">Generated · <b>real LangGraph StateGraph</b></div>'
+        +'<h2>The contained run</h2>'
+        +'<div class="ad-cap">'+escapeHtml(lg.repo)+'  ·  criterion: '+escapeHtml(lg.criterion)+'</div></div>'
+        +'<div style="padding:0 20px">'+cards+'</div>'
+        +'<div class="ad-note" style="padding-top:0">Untrusted runtime PRs — the injection channel is the PR body. '
+          +'The model believed #99 and proposed it; the highlighted row is its pick.</div>'
+        +'<div class="ad-table lgc-table">'
+          +'<div class="adr head"><div class="adc">PR</div><div class="adc">Title / body</div>'
+          +'<div class="adc">Files</div><div class="adc">Model</div></div>'
+          +corpusRows
+        +'</div>'
+        +verdict
+        +verify
+        +'<div class="ad-prov"><b>Provenance.</b> Produced by a real build-time run of the hermetic '
+          +'LangGraph demo (<code>python -m demos.langgraph_merge_demo</code>) through the unmodified '
+          +'kernel — no hand-authored receipt, no fabricated hash.</div>'
+        +'<div class="ad-prov">The LangGraph integration is the proposal path, not the enforcement '
+          +'boundary: the boundary is the required Check Run keyholder under branch protection, which '
+          +'only the enforcer can conclude.</div>'
+      +'</div>';
+  }
+
   // ================= TABS =================
   let enforcementPlayed=false, resolutionPlayed=false;
-  const VIEWS = {enforcement:'view-enforcement', resolution:'view-resolution', attackme:'view-attackme'};
-  const TABS = {enforcement:'tab-enforcement', resolution:'tab-resolution', attackme:'tab-attackme'};
+  const VIEWS = {enforcement:'view-enforcement', langgraph:'view-langgraph', resolution:'view-resolution', attackme:'view-attackme'};
+  const TABS = {enforcement:'tab-enforcement', langgraph:'tab-langgraph', resolution:'tab-resolution', attackme:'tab-attackme'};
   const LEDE = {
     resolution: "A fuzzy instruction has to be turned into one specific PR — and that means "
       +"reading untrusted data. Watch how the target is found without letting the model's "
@@ -1187,6 +1372,9 @@
     enforcement: "An authorized action and six attacks, each routed through the same eleven-check "
       +"kernel. Pick one and watch where it gets stopped — or whether it reaches the gate at the "
       +"bottom, the one irreversible thing the enforcer alone can open.",
+    langgraph: "A real LangGraph orchestrator gets prompt-injected and proposes the attacker PR. "
+      +"Watch Signet contain it from below — the gate rejects it, the merge Check Run concludes "
+      +"failure, and the signed receipt is one command away from verifying on your own machine.",
     attackme: "Before the server-side rail, the local PreToolUse gate contains a hijacked agent in "
       +"your own repo. Watch it try to edit a protected file, disable its own gate, and push to a "
       +"protected branch — each denied with a signed receipt, run live against the shipped gate.",
@@ -1217,8 +1405,10 @@
     renderEgress();
     renderLiveGitHub();
     renderAttackMe();
+    renderLangGraph();
     document.getElementById('lede').textContent = LEDE.enforcement;
     document.getElementById('tab-enforcement').addEventListener('click', ()=>showTab('enforcement'));
+    document.getElementById('tab-langgraph').addEventListener('click', ()=>showTab('langgraph'));
     document.getElementById('tab-resolution').addEventListener('click', ()=>showTab('resolution'));
     document.getElementById('tab-attackme').addEventListener('click', ()=>showTab('attackme'));
   }

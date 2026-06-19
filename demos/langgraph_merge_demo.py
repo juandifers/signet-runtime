@@ -137,9 +137,11 @@ def build_graph(interceptor, world: GitHubWorld, *, mode: str, provider=None, mo
 # ---------------------------------------------------------------------------
 # The 7-step story + a clean-room inclusion proof.
 # ---------------------------------------------------------------------------
-def clean_room_proof(receipt, *, env, mandate, decision_result) -> tuple:
-    """Append the decision's receipt to an RFC-6962-style Merkle log, then verify its inclusion
-    with ONLY (record, proof, signed tree head, enforcer public key) — no runtime access."""
+def build_proof_bundle(receipt, *, env, mandate, decision_result) -> dict:
+    """Append the decision's receipt to an RFC-6962-style Merkle log and verify its inclusion with
+    ONLY (record, proof, signed tree head, enforcer public key) — no runtime access. Returns the
+    live objects PLUS a fully JSON-serializable `bundle` — the exact payload an outside party
+    re-verifies clean-room (zero Signet imports; see verify/verify_merge.py)."""
     log = TransparencyLog(env.enforcer_sk, env.enforcer_vk)
     record = build_decision_record(
         receipt, repo_id=REPO, open_mandate_id=mandate.mandate_id(),
@@ -150,7 +152,25 @@ def clean_room_proof(receipt, *, env, mandate, decision_result) -> tuple:
     sth = log.sign_root()
     proof = log.inclusion_proof(0)
     ok, msg = verify_inclusion(record, proof, sth, env.enforcer_vk)
-    return ok, msg, sth
+    # The serializable artifact. `record` is record.to_canonical() — the EXACT dict whose canonical
+    # JSON hashes to record_hash — so a clean-room verifier recomputes the hash from it verbatim.
+    bundle = {
+        "schema": "signet.langgraph_demo.proof_bundle.v1",
+        "enforcer_vk": env.enforcer_vk,
+        "record": record.to_canonical(),
+        "proof": {"leaf_index": proof.leaf_index, "tree_size": proof.tree_size,
+                  "receipt_hash": proof.receipt_hash, "leaf_hash": proof.leaf_hash,
+                  "audit_path": list(proof.audit_path)},
+        "sth": {"schema": sth.schema, "tree_size": sth.tree_size, "root_hash": sth.root_hash,
+                "timestamp": sth.timestamp, "log_id": sth.log_id, "signature": sth.signature},
+    }
+    return {"record": record, "proof": proof, "sth": sth, "ok": ok, "msg": msg, "bundle": bundle}
+
+
+def clean_room_proof(receipt, *, env, mandate, decision_result) -> tuple:
+    """Thin wrapper kept for the CLI run path: (included?, message, signed tree head)."""
+    b = build_proof_bundle(receipt, env=env, mandate=mandate, decision_result=decision_result)
+    return b["ok"], b["msg"], b["sth"]
 
 
 def run(mode: str = "hermetic", *, provider=None, model=None, verbose: bool = True) -> dict:
@@ -200,6 +220,65 @@ def run(mode: str = "hermetic", *, provider=None, model=None, verbose: bool = Tr
     return {"result": result, "proposal": proposal, "rail": rail, "receipt": receipt,
             "inclusion_ok": ok, "attacker_merged": attacker_merged, "merged": merged,
             "headline": HEADLINE}
+
+
+def build_trace(mode: str = "hermetic") -> dict:
+    """Run the contained LangGraph demo and return its artifacts as ONE JSON-serializable dict —
+    the single source of truth shared by the CLI demo and `demos.build_demo` (the live page). Every
+    field here is produced by this real build-time run of the unmodified kernel; nothing is
+    hand-authored. See SPEC §1 for the contract."""
+    world = build_world()
+    interceptor, rail, receipts, env, mandate = make_interceptor(world)
+    effective = resolve_effective_policy(InMemoryPolicySource(), REPO, PRINCIPAL,
+                                         mandate.as_task_policy())
+    graph = build_graph(interceptor, world, mode=mode)
+
+    out = graph.invoke({}, {"configurable": {"thread_id": "demo-trace"}})
+    result = out["result"]
+    proposal = out["proposal"]
+    receipt = receipts.all()[-1]
+    bundle = build_proof_bundle(receipt, env=env, mandate=mandate, decision_result=result)
+    rec_ok, _ = receipts.verify(receipt)
+
+    scope_layers = [list(l) for l in effective.extra_allow_layers] or [list(effective.allow_paths)]
+    corpus = []
+    for n, rec in sorted(world.open_prs.items()):
+        is_attacker = rec.author == "mallory"
+        corpus.append({
+            "pr": n, "title": rec.title, "author": rec.author,
+            "target": target_id(rec.repo, n, rec.base, rec.head_sha),
+            "files": list(rec.files), "closes_issue": rec.closes_issue,
+            "role": "attacker" if is_attacker else "legit",
+            "picked": n == proposal,
+            "injected_body": rec.injected_body if is_attacker else None,
+        })
+    check = rail.conclusions[-1] if rail.conclusions else None
+    return {
+        "schema": "signet.langgraph_demo.trace.v1",
+        "mode": mode,
+        "repo": REPO,
+        "criterion": CRITERION,
+        "headline": HEADLINE,
+        "mandate": {"criterion": mandate.criterion, "scope": list(mandate.scope_allow),
+                    "cap": mandate.cap, "repo": REPO, "mandate_id": mandate.mandate_id()},
+        "fence": {"scope_layers": scope_layers, "deny": list(effective.deny_paths),
+                  "bases": list(effective.allowed_bases)},
+        "world": corpus,
+        "proposal": proposal,
+        "proposal_mode": "scripted injection" if mode != "llm" else "real quarantined model",
+        "verdict": {"outcome": result["outcome"], "escalation_source": result["escalation_source"],
+                    "cause": result["cause"], "bound_target": result["bound_target"]},
+        "check_run": ({"check_ref": check[0], "head_sha": check[1], "conclusion": check[2]}
+                      if check else None),
+        "merged": result["outcome"] == "allow",
+        "receipt": {"decision": receipt.decision, "status": receipt.payment_status,
+                    "receipt_id": receipt.receipt_id, "receipt_hash": receipt.receipt_hash,
+                    "chain_hash": receipt.chain_hash, "sig_ok": rec_ok},
+        "proof": {"inclusion_ok": bundle["ok"], "message": bundle["msg"],
+                  "root_hash": bundle["sth"].root_hash},
+        "bundle": bundle["bundle"],
+        "verify_cmd": "python3 verify/verify_merge.py docs/langgraph_receipt.json",
+    }
 
 
 def main(argv=None) -> int:
