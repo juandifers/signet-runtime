@@ -34,7 +34,8 @@ from typing import Dict, Optional, Tuple
 from .base import AuthorizationResult, Authorizer
 from .. import chain
 from ..models import ExecutionRequest, ExecutionToken
-from ..rail_algebra import Capability, Effect, EffectKeyOneShot, ExternalEnforcer
+from ..rail_algebra import (Capability, Effect, EffectKeyOneShot, ExternalEnforcer, MERGE_SCHEDULE,
+                            Phase, phase_scope)
 
 
 class GitHubRail(ABC):
@@ -85,6 +86,10 @@ def _parse_head_sha(recipient: str) -> str:
 
 class GitHubRailBridge(Authorizer):
     rail = "github"
+    # RESOLUTION rail: the Policy (the typed-data fence) fired UPSTREAM at mandate resolution
+    # (RESOLVE); this authorizer holds the Bind + Door, both at AUTHORIZE. The full declared
+    # schedule across the split Composition (verified faithful in tests/test_rail_schedule.py).
+    SCHEDULE = MERGE_SCHEDULE
 
     def __init__(self, verifier, enforcer_verify_key: str,
                  github_rail: Optional[GitHubRail] = None):
@@ -147,9 +152,10 @@ class GitHubRailBridge(Authorizer):
                                 req: ExecutionRequest) -> Tuple[bool, str]:
         """Independent re-check (no side effect) via EffectKeyOneShot.recheck. Fail closed on any
         mismatch (head_sha/base/path substitution or unbound token)."""
-        if not self.bind.recheck(token, req):
-            return (False, "Effect/context mismatch vs the approved Cart "
-                           "(head_sha/base/path substitution or unbound token).")
+        with phase_scope(Phase.AUTHORIZE):                  # Bind @ AUTHORIZE (MERGE_SCHEDULE)
+            if not self.bind.recheck(token, req):
+                return (False, "Effect/context mismatch vs the approved Cart "
+                               "(head_sha/base/path substitution or unbound token).")
         return True, "bound to this transaction"
 
     def on_rejected(self, token: ExecutionToken, req: ExecutionRequest, reason: str) -> None:
@@ -162,7 +168,8 @@ class GitHubRailBridge(Authorizer):
         """Conclude the required Check Run as success -> the protected-branch merge gate is
         satisfied. Only the enforcer can do this. Reached ONLY after both guards pass."""
         self._last_check_ref = None
-        outcome = self.door.enforce(self._cap(token, req))
+        with phase_scope(Phase.AUTHORIZE):                  # Door @ AUTHORIZE (MERGE_SCHEDULE)
+            outcome = self.door.enforce(self._cap(token, req))
         if isinstance(outcome, Effect):
             return AuthorizationResult(
                 True, "Check Run concluded success; protected-branch merge gate satisfied.",

@@ -264,6 +264,7 @@ def _resolve_via_role_b(om: OpenMandate, world: GitHubWorld, effective: MergePol
     from .ambiguity import structural_prefilter
     from .domain import github_membership_policy
     from evals._rail_core.role_b import ESC_LAYER_A, run_role_b_stages
+    from signet.rail_algebra import Phase, phase_scope
 
     candidates = [CandidateView.from_pr(rec) for rec in world.open_prs.values()]
     # The per-rail gate predicates now come from the rail-algebra POLICY variant
@@ -276,10 +277,14 @@ def _resolve_via_role_b(om: OpenMandate, world: GitHubWorld, effective: MergePol
     within_allowlist = lambda pr: membership.within_allowlist(membership.project(world, pr))
     within_fence = lambda pr: membership.within_fence(membership.project(world, pr))
 
-    stages = run_role_b_stages(
-        om.criterion, candidates, set(world.open_prs), resolver=resolver,
-        within_allowlist=within_allowlist, within_fence=within_fence,
-        structural_prefilter=lambda: structural_prefilter(om, world), trace_store=trace_store)
+    # RESOLUTION rail: the Policy's two LAYERS (allowlist ceiling, scope/protected fence) both fire
+    # at the RESOLVE phase, inside the gate (MERGE_SCHEDULE). The phase_scope tags the gate region so
+    # the membership layers' self-marks observe RESOLVE; it is a no-op outside an observe().
+    with phase_scope(Phase.RESOLVE):
+        stages = run_role_b_stages(
+            om.criterion, candidates, set(world.open_prs), resolver=resolver,
+            within_allowlist=within_allowlist, within_fence=within_fence,
+            structural_prefilter=lambda: structural_prefilter(om, world), trace_store=trace_store)
 
     if stages.status == "escalate":
         considered: List[Considered] = []

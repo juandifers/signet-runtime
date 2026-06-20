@@ -28,8 +28,8 @@ from ...authorizers.base import AuthorizationResult, Authorizer
 from ... import chain
 from ...models import ExecutionRequest, ExecutionToken
 from ...broker.mandate import MandateProvider
-from ...rail_algebra import (Capability, Composition, Effect, EffectKeyOneShot, NetworkSolePath,
-                             PatternAllowlist)
+from ...rail_algebra import (Capability, Composition, EGRESS_SCHEDULE, Effect, EffectKeyOneShot,
+                             NetworkSolePath, PatternAllowlist, Phase, phase_scope)
 from .chain_adapter import effect_from_request
 from .effect import EgressEffect
 from .mandate import EgressStandingPolicy, effective_admits
@@ -55,6 +55,7 @@ class EgressAuthorizer(Authorizer):
             bind=EffectKeyOneShot(recheck_fn=self._chain_bound),
             door=NetworkSolePath(admit=self._admit, sole_path=False),   # v0: advisory (no netns)
             name="egress",
+            schedule=EGRESS_SCHEDULE,    # all three axes @ ADMIT (the inline-admission shape)
         )
 
     # -- Bind content: which fields bind (the TOCTOU/freshness gate) --
@@ -112,23 +113,25 @@ class EgressAuthorizer(Authorizer):
     # ============================================================================
     def recheck_against_context(self, token: ExecutionToken,
                                 req: ExecutionRequest) -> Tuple[bool, str]:
-        # Bind — TOCTOU freshness (chain_hash bound + effect == signed Cart).
-        if not self.composition.bind.recheck(token, req):
-            return False, self._bind_reason(token, req)
+        # ADMISSION rail: Bind + Policy both fire at the single ADMIT phase (EGRESS_SCHEDULE).
+        with phase_scope(Phase.ADMIT):
+            # Bind — TOCTOU freshness (chain_hash bound + effect == signed Cart).
+            if not self.composition.bind.recheck(token, req):
+                return False, self._bind_reason(token, req)
 
-        # Bind — frozen-mandate lifecycle (the capability's authorization envelope).
-        eff = effect_from_request(req)
-        mandate = self._mandates.get(req.context.task_id)
-        if mandate is None:
-            return False, "no-frozen-mandate"
-        self.last_mandate_hash = mandate.mandate_hash()
-        if mandate.is_expired(self._clock()):
-            return False, "mandate-expired"
+            # Bind — frozen-mandate lifecycle (the capability's authorization envelope).
+            eff = effect_from_request(req)
+            mandate = self._mandates.get(req.context.task_id)
+            if mandate is None:
+                return False, "no-frozen-mandate"
+            self.last_mandate_hash = mandate.mandate_hash()
+            if mandate.is_expired(self._clock()):
+                return False, "mandate-expired"
 
-        # Policy — destination within mandate ∩ standing (raw-IP via trusted resolution).
-        verdict = self.composition.policy.decide(
-            self.composition.policy.project(mandate, eff))
-        return verdict.is_allow, verdict.reason
+            # Policy — destination within mandate ∩ standing (raw-IP via trusted resolution).
+            verdict = self.composition.policy.decide(
+                self.composition.policy.project(mandate, eff))
+            return verdict.is_allow, verdict.reason
 
     def produce_capability(self, token: ExecutionToken,
                            req: ExecutionRequest) -> AuthorizationResult:
@@ -137,7 +140,8 @@ class EgressAuthorizer(Authorizer):
         destination."""
         eff = effect_from_request(req)
         cap = Capability(effect=eff, lifecycle=self.composition.bind.lifecycle(), handle=token)
-        outcome = self.composition.door.enforce(cap)
+        with phase_scope(Phase.ADMIT):                      # Door @ ADMIT (same phase as Bind/Policy)
+            outcome = self.composition.door.enforce(cap)
         if isinstance(outcome, Effect):
             return AuthorizationResult(True, outcome.detail, payment_ref=outcome.ref, rail=self.rail)
         return AuthorizationResult(False, outcome.reason, payment_ref=outcome.ref, rail=self.rail)

@@ -21,6 +21,8 @@ from .policy import (AllowOnUntrustedContent, BasePolicy, Content, DeclarativeMe
                      PatternAllowlist, Quantitative)
 from .bind import EffectKeyOneShot, InlineCapability, MeteredLedger
 from .door import AdvisoryInline, ExternalEnforcer, KeyholderBroker, NetworkSolePath
+from .schedule import (EGRESS_SCHEDULE, MERGE_SCHEDULE, Phase, Schedule, Step, mark, observe,
+                       observed_schedule, phase_scope)
 from .payment import payment_composition
 
 __all__ = [
@@ -38,4 +40,7 @@ __all__ = [
     "ExternalEnforcer", "KeyholderBroker", "NetworkSolePath", "AdvisoryInline",
     # payment composition stub
     "payment_composition",
+    # the lifecycle dimension (schedule)
+    "Phase", "Step", "Schedule", "phase_scope", "observe", "mark", "observed_schedule",
+    "MERGE_SCHEDULE", "EGRESS_SCHEDULE",
 ]

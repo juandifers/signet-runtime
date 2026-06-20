@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, Tuple, Union
 
+from .schedule import DOOR, mark
 from .types import (ADVISORY, Blocked, CUSTODY, Effect, EXTERNAL, SOLE_PATH)
 
 DoorResult = Union[Effect, Blocked]
@@ -40,6 +41,7 @@ class ExternalEnforcer:
         self._decline = decline
 
     def enforce(self, cap) -> DoorResult:
+        mark(DOOR)                                          # phase from the rail's active phase_scope
         try:
             ref = self._perform(cap)
         except PermissionError as e:                        # rail refused (consume-once / unbound)
@@ -84,6 +86,7 @@ class NetworkSolePath:
         self.soundness = SOLE_PATH if sole_path else ADVISORY
 
     def enforce(self, cap) -> DoorResult:
+        mark(DOOR)                                          # phase from the rail's active phase_scope
         admitted, reason, ref = self._admit(cap)
         return Effect(detail=reason, ref=ref) if admitted else Blocked(reason=reason, ref=ref)
 

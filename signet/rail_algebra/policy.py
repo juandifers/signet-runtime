@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .schedule import POLICY, POLICY_ALLOWLIST, POLICY_FENCE, mark
 from .types import (Features, OWN, UNTRUSTED, Verdict, allow, deny)
 
 
@@ -99,11 +100,15 @@ class DeclarativeMembership(BasePolicy):
     def project(self, world, candidate) -> Features:
         return self._features(self._project_attrs(world, candidate))
 
-    # the two fence layers, exposed so a rail's gate predicates delegate here verbatim.
+    # the two fence layers, exposed so a rail's gate predicates delegate here verbatim. Each layer
+    # SELF-MARKS its scheduled component (the phase comes from the rail's active phase_scope); the
+    # mark is a no-op outside an observe() (BEHAVIOR-PRESERVED).
     def within_allowlist(self, features: Features) -> bool:
+        mark(POLICY_ALLOWLIST)
         return bool(self._allowlist_fn(dict(features.values), self._spec))
 
     def within_fence(self, features: Features) -> bool:
+        mark(POLICY_FENCE)
         ok, _ = self._fence_fn(dict(features.values), self._spec)
         return bool(ok)
 
@@ -153,6 +158,7 @@ class PatternAllowlist(BasePolicy):
         return Features(dict(self._project_features(world, candidate)), dict(self.PROVENANCE))
 
     def decide(self, features: Features) -> Verdict:
+        mark(POLICY)                                        # egress: the single pattern layer @ ADMIT
         if features.get("is_ip_literal"):
             return (allow(self._allow_literal) if features.get("raw_ip_resolved_match")
                     else deny(self._deny_grant))

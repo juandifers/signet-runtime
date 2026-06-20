@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from .schedule import BIND, mark
 from .types import Capability, METERED, ONE_SHOT
 
 
@@ -42,6 +43,7 @@ class EffectKeyOneShot:
         return Capability(effect=effect, lifecycle=ONE_SHOT)
 
     def recheck(self, cap, runtime_context) -> bool:
+        mark(BIND)                                          # phase from the rail's active phase_scope
         try:
             return bool(self._recheck_fn(cap, runtime_context))
         except Exception:

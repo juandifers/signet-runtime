@@ -137,9 +137,12 @@ class Composition:
     bind: Any
     door: Any
     name: str = ""
+    schedule: Any = None        # an optional rail_algebra.Schedule: WHEN each axis fires (the
+                                # lifecycle dimension). None for compositions whose phasing is the
+                                # flat all-at-once shape and not yet declared (e.g. the payment stub).
 
     def describe(self) -> dict:
-        return {
+        d = {
             "name": self.name,
             "policy": getattr(self.policy, "name", type(self.policy).__name__),
             "bind": type(self.bind).__name__,
@@ -147,6 +150,9 @@ class Composition:
             "door": type(self.door).__name__,
             "door_soundness": getattr(self.door, "soundness", "?"),
         }
+        if self.schedule is not None:
+            d["schedule"] = [(s.component, s.phase.name) for s in self.schedule]
+        return d
 
 
 # ============================================================================
