@@ -262,14 +262,19 @@ def _resolve_via_role_b(om: OpenMandate, world: GitHubWorld, effective: MergePol
     the gate has already passed; this function only binds the survivor to a ClosedMandate."""
     from .resolver import CandidateView                  # local import keeps the graph lean
     from .ambiguity import structural_prefilter
+    from .domain import github_membership_policy
     from evals._rail_core.role_b import ESC_LAYER_A, run_role_b_stages
 
     candidates = [CandidateView.from_pr(rec) for rec in world.open_prs.values()]
-    # The per-rail predicates: the allow-list UNIVERSE ceiling (repo + base) and the scope/protected
-    # FENCE (the effective policy's is_fenced, which carries the OpenMandate scope as an allow layer
-    # AND the protected/deny globs). The ORDER + fail-closed live in run_role_b_stages.
-    within_allowlist = lambda pr: domain.within_allowlist(domain._target(world.open_prs[pr]), world)
-    within_fence = lambda pr: not effective.is_fenced(world.open_prs[pr].files)
+    # The per-rail gate predicates now come from the rail-algebra POLICY variant
+    # (DeclarativeMembership over the typed PolicySpec): the allow-list UNIVERSE ceiling (repo +
+    # base) and the scope/protected FENCE (protected_path==False AND in_scope==True). This is
+    # byte-identical to the prior domain.within_allowlist / `not effective.is_fenced` calls — the
+    # membership policy wraps the SAME shared evaluator — but the merge gate now literally runs the
+    # composed Policy. The ORDER + fail-closed still live in run_role_b_stages.
+    membership = github_membership_policy(effective)
+    within_allowlist = lambda pr: membership.within_allowlist(membership.project(world, pr))
+    within_fence = lambda pr: membership.within_fence(membership.project(world, pr))
 
     stages = run_role_b_stages(
         om.criterion, candidates, set(world.open_prs), resolver=resolver,

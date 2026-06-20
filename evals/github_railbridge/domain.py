@@ -163,6 +163,32 @@ def github_schema_for_policy(policy) -> tuple:
     return github_candidate_schema(repo=policy.repo_id, bases=policy.allowed_bases)
 
 
+# ============================================================================
+# The merge rail's POLICY as a rail-algebra DeclarativeMembership (signet.rail_algebra).
+# It wraps the SHARED evaluator (evaluate_allowlist / evaluate_fence) over the typed PolicySpec — so
+# `within_allowlist`/`within_fence` are byte-identical to the prior inline calls (BEHAVIOR-PRESERVED),
+# but the merge gate now literally runs the Policy variant. All fence/allowlist attrs are OWN, so it
+# is provenance-monotone. `project(world, pr_id)` maps an OWNED PR id to the declared attrs and fails
+# CLOSED (empty attrs -> evaluate_* return False) for a missing id.
+# ============================================================================
+def github_membership_policy(policy):
+    """Build the DeclarativeMembership Policy bound to an effective MergePolicy (duck-typed:
+    repo_id, allowed_bases, the glob matchers github_project reads)."""
+    from signet.rail_algebra import DeclarativeMembership
+    repo, bases = policy.repo_id, policy.allowed_bases
+
+    def project_attrs(world, pr_id):
+        rec = getattr(world, "open_prs", {}).get(pr_id) if pr_id is not None else None
+        return github_project(rec, policy) if rec is not None else {}
+
+    return DeclarativeMembership(
+        name="github", schema=github_candidate_schema(repo=repo, bases=bases),
+        spec=github_policy_spec(repo=repo, bases=bases), project_attrs=project_attrs,
+        allowlist_fn=evaluate_allowlist, fence_fn=evaluate_fence,
+        allow_witness_values={"repo": str(repo).lower(), "base": bases[0],
+                              "protected_path": False, "in_scope": True})
+
+
 def _pr_number(target: str) -> Optional[int]:
     m = re.search(r"#(\d+)->", str(target))
     return int(m.group(1)) if m else None

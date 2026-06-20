@@ -13,6 +13,17 @@ calls it as its FIRST line. Then it independently re-checks the effect against
 `req.context` (effect_class, recipient incl. head_sha, destination_account) and
 that the token is bound to THIS exact transaction, refusing on any mismatch
 (fail closed). No rail logic leaks into the kernel; the kernel stays rail-agnostic.
+
+RAIL ALGEBRA (signet.rail_algebra): the two content hooks now DELEGATE to a Bind + Door pair —
+recheck_against_context = EffectKeyOneShot.recheck (the kernel context-bind: the token bound to
+THIS transaction + the runtime effect == the signed Cart), and produce_capability / on_rejected =
+ExternalEnforcer.enforce / .decline (the required Check Run concluded success/failure; the
+protected-branch ruleset is the EXTERNAL PEP). The merge rail's POLICY (the typed-data fence) is
+enforced UPSTREAM at mandate resolution (the Role-B gate, see evals/github_railbridge) — so the
+authorizer holds the Bind+Door half of the Composition; the full (Policy, Bind, Door) is assembled
+at the rail's resolve seam. Binding-field content is the rail's (which fields bind), exactly as
+role_b injects its gate predicates; the order + fail-closed stay in the algebra/template. This file
+imports only signet-internal modules (no evals), keeping trusted code free of editable-rail deps.
 """
 from __future__ import annotations
 
@@ -23,6 +34,7 @@ from typing import Dict, Optional, Tuple
 from .base import AuthorizationResult, Authorizer
 from .. import chain
 from ..models import ExecutionRequest, ExecutionToken
+from ..rail_algebra import Capability, Effect, EffectKeyOneShot, ExternalEnforcer
 
 
 class GitHubRail(ABC):
@@ -78,6 +90,11 @@ class GitHubRailBridge(Authorizer):
                  github_rail: Optional[GitHubRail] = None):
         super().__init__(verifier, enforcer_verify_key)
         self._rail = github_rail or MockGitHubRail()
+        self._last_check_ref: Optional[str] = None
+        # ---- the rail algebra Bind + Door (the Policy half lives upstream at resolution) ----
+        self.bind = EffectKeyOneShot(recheck_fn=self._chain_bound)
+        self.door = ExternalEnforcer(perform=self._conclude_success,
+                                     decline=self._conclude_failure)
 
     @staticmethod
     def _context_matches_cart(req: ExecutionRequest) -> bool:
@@ -97,39 +114,58 @@ class GitHubRailBridge(Authorizer):
                 and x.recipient.startswith(x.action + ":")
                 and "@" in x.recipient)
 
-    # -- the content hooks; base.Authorizer.authorize owns verify_token + the order --
+    # -- Bind content: which fields bind (the kernel context-bind / TOCTOU gate) --
+    def _chain_bound(self, token: ExecutionToken, req: ExecutionRequest) -> bool:
+        """The token is bound to THIS exact transaction AND the runtime effect matches the approved
+        Cart (effect_class, recipient incl. head_sha, destination_account). Returns bool; the
+        algebra's EffectKeyOneShot.recheck fails closed if this raises."""
+        recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
+        return (recomputed == token.chain_hash
+                and self._well_formed(req)
+                and self._context_matches_cart(req))
+
+    # -- Door content: conclude the required Check Run (the EXTERNAL branch-protection gate) --
+    def _conclude_success(self, cap: Capability) -> str:
+        req, token = cap.effect, cap.handle
+        head_sha = _parse_head_sha(req.context.recipient)
+        recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
+        self._last_check_ref = self._rail.open_check(token.chain_hash, head_sha)
+        return self._rail.conclude(self._last_check_ref, recomputed, "success")
+
+    def _conclude_failure(self, cap: Capability, reason: str) -> str:
+        req, token = cap.effect, cap.handle
+        head_sha = _parse_head_sha(req.context.recipient)
+        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
+        self._rail.conclude(check_run_id, token.chain_hash, "failure")
+        return check_run_id
+
+    def _cap(self, token: ExecutionToken, req: ExecutionRequest) -> Capability:
+        return Capability(effect=req, lifecycle=self.bind.lifecycle(), handle=token)
+
+    # -- the two template hooks; base.Authorizer.authorize owns verify_token + the order --
     def recheck_against_context(self, token: ExecutionToken,
                                 req: ExecutionRequest) -> Tuple[bool, str]:
-        """Independent re-check (no side effect): the token is bound to THIS exact transaction, and
-        the runtime effect matches the approved Cart (effect_class, recipient incl. head_sha,
-        destination_account). Fail closed on any mismatch."""
-        recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
-        bound = (recomputed == token.chain_hash
-                 and self._well_formed(req)
-                 and self._context_matches_cart(req))
-        if not bound:
+        """Independent re-check (no side effect) via EffectKeyOneShot.recheck. Fail closed on any
+        mismatch (head_sha/base/path substitution or unbound token)."""
+        if not self.bind.recheck(token, req):
             return (False, "Effect/context mismatch vs the approved Cart "
                            "(head_sha/base/path substitution or unbound token).")
         return True, "bound to this transaction"
 
     def on_rejected(self, token: ExecutionToken, req: ExecutionRequest, reason: str) -> None:
-        """Preserve the rail-native record: conclude the required Check Run as FAILURE, bound to
+        """Rail-native record of a rejection: conclude the required Check Run as FAILURE, bound to
         the token's chain_hash (so the protected merge demonstrably did NOT proceed)."""
-        head_sha = _parse_head_sha(req.context.recipient)
-        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
-        self._rail.conclude(check_run_id, token.chain_hash, "failure")
+        self.door.decline(self._cap(token, req), reason)
 
     def produce_capability(self, token: ExecutionToken,
                            req: ExecutionRequest) -> AuthorizationResult:
         """Conclude the required Check Run as success -> the protected-branch merge gate is
         satisfied. Only the enforcer can do this. Reached ONLY after both guards pass."""
-        head_sha = _parse_head_sha(req.context.recipient)
-        recomputed = chain.chain_hash(req.intent, req.cart, req.payment)
-        check_run_id = self._rail.open_check(token.chain_hash, head_sha)
-        try:
-            ref = self._rail.conclude(check_run_id, recomputed, "success")
-        except PermissionError as e:
-            return AuthorizationResult(False, str(e), payment_ref=check_run_id, rail=self.rail)
-        return AuthorizationResult(
-            True, "Check Run concluded success; protected-branch merge gate satisfied.",
-            payment_ref=ref, rail=self.rail)
+        self._last_check_ref = None
+        outcome = self.door.enforce(self._cap(token, req))
+        if isinstance(outcome, Effect):
+            return AuthorizationResult(
+                True, "Check Run concluded success; protected-branch merge gate satisfied.",
+                payment_ref=outcome.ref, rail=self.rail)
+        return AuthorizationResult(False, outcome.reason,
+                                   payment_ref=self._last_check_ref, rail=self.rail)
