@@ -1,0 +1,140 @@
+{
+  "egress": [
+    {
+      "admitted": true,
+      "cause": "admit egress http_connect to api.allowed.test:443 (chain 2edfab3bdf1f)",
+      "host": "api.allowed.test",
+      "label": "allowed_host",
+      "port": 443
+    },
+    {
+      "admitted": false,
+      "cause": "out-of-mandate-destination",
+      "host": "evil.test",
+      "label": "disallowed_host",
+      "port": 443
+    },
+    {
+      "admitted": true,
+      "cause": "admit egress http_connect to sub.allowed.test:443 (chain ac10238a8cff)",
+      "host": "sub.allowed.test",
+      "label": "wildcard_host",
+      "port": 443
+    },
+    {
+      "admitted": true,
+      "cause": "admit egress http_connect to 127.0.0.1:9101 (chain 1f226dd39f16)",
+      "host": "127.0.0.1",
+      "label": "raw_ip_matching_allowed",
+      "port": 9101
+    },
+    {
+      "admitted": false,
+      "cause": "out-of-mandate-destination",
+      "host": "127.0.0.1",
+      "label": "raw_ip_evasion",
+      "port": 9103
+    }
+  ],
+  "merge": {
+    "policy": [
+      {
+        "id": 1,
+        "within_allowlist": true,
+        "within_fence": true
+      },
+      {
+        "id": 2,
+        "within_allowlist": true,
+        "within_fence": true
+      },
+      {
+        "id": 3,
+        "within_allowlist": false,
+        "within_fence": true
+      },
+      {
+        "id": 8,
+        "within_allowlist": true,
+        "within_fence": false
+      },
+      {
+        "id": 999,
+        "within_allowlist": false,
+        "within_fence": false
+      }
+    ],
+    "resolve": [
+      {
+        "cause": "",
+        "escalation_source": "resolved",
+        "label": "singleton_legit",
+        "resolved": true,
+        "target_id": 1
+      },
+      {
+        "cause": "unresolved_constraint: off-fence (scope/protected)",
+        "escalation_source": "gate_contained",
+        "label": "singleton_attacker_off_fence",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: off-allowlist (universe ceiling: repo/service + base/environment)",
+        "escalation_source": "gate_contained",
+        "label": "singleton_off_allowlist",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: ambiguous: 2 owned candidates (#1, #2) plausibly match the criterion",
+        "escalation_source": "layer_b_cardinality",
+        "label": "set_two_owned",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: no owned candidate matched the criterion",
+        "escalation_source": "no_match",
+        "label": "empty",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: no owned candidate matched the criterion",
+        "escalation_source": "no_match",
+        "label": "out_of_set_id",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: no owned candidate matched the criterion",
+        "escalation_source": "no_match",
+        "label": "malformed_json",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: off-fence (scope/protected)",
+        "escalation_source": "gate_contained",
+        "label": "embedded_instruction",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: no owned candidate matched the criterion",
+        "escalation_source": "no_match",
+        "label": "bool_choice",
+        "resolved": false,
+        "target_id": null
+      },
+      {
+        "cause": "unresolved_constraint: no owned candidate matched the criterion",
+        "escalation_source": "no_match",
+        "label": "string_all",
+        "resolved": false,
+        "target_id": null
+      }
+    ]
+  }
+}
