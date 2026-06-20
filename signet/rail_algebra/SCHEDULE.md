@@ -18,24 +18,37 @@ lifecycle phase it executes in:
 
 | rail | axis / Policy layer | invocation site (traced) | phase |
 |---|---|---|---|
-| merge | Policy `within_allowlist` (universe ceiling: repo + base) | `role_b.py:62` (`run_gate`) ← lambda `mandate.py:276` ← `policy.py:within_allowlist` | **RESOLVE** |
-| merge | Policy `within_fence` (scope/protected fence) | `role_b.py:67` (`run_gate`) ← lambda `mandate.py:277` ← `policy.py:within_fence` | **RESOLVE** |
+| merge | Policy `within_allowlist` (universe ceiling: repo + base) | `role_b.py:62` (`run_gate`) ← lambda `mandate.py:277` ← `policy.py:within_allowlist` | **RESOLVE** |
+| merge | Policy `within_fence` (scope/protected fence) | `role_b.py:67` (`run_gate`) ← lambda `mandate.py:278` ← `policy.py:within_fence` | **RESOLVE** |
 | merge | allow-scope (`in_scope`) closes | computed in `github_project` → consumed *inside* `evaluate_fence` (the `within_fence` layer) | **RESOLVE** (no distinct CLOSE) |
 | merge | Bind `recheck` (TOCTOU: chain_hash + effect == Cart) | `github_railbridge.py:recheck_against_context` ← `base.py:62` | **AUTHORIZE** |
 | merge | Door `enforce` (conclude required Check Run) | `github_railbridge.py:produce_capability` ← `base.py:66` | **AUTHORIZE** |
-| egress | Bind `recheck` (chain-bind + effect == Cart) | `egress/authorizer.py:recheck_against_context` ← `base.py:62` | **ADMIT** |
-| egress | Policy `decide` (dest ∈ mandate ∩ standing) | `egress/authorizer.py:recheck_against_context` | **ADMIT** |
-| egress | Door `enforce` (inline proxy admission) | `egress/authorizer.py:produce_capability` ← `base.py:66` | **ADMIT** |
+| egress | Bind `recheck` (chain-bind + effect == Cart) | `egress/authorizer.py:_bind_outcome` ← `EffectKeyOneShot.recheck` | **ADMIT** |
+| egress | Bind `MandateFreshness` (frozen mandate exists ∧ not expired) | `egress/authorizer.py:MandateFreshness.invoke` ← `_check_mandate_freshness` | **ADMIT** |
+| egress | Policy `decide` (dest ∈ mandate ∩ standing) | `egress/authorizer.py:_policy_outcome` | **ADMIT** |
+| egress | Door `enforce` (inline proxy admission) | `egress/authorizer.py:_door_result` ← `NetworkSolePath.enforce` | **ADMIT** |
+
+> **UPDATE (promotion — see `PROMOTION.md`).** `base.Authorizer` is now SCHEDULE-DRIVEN at the
+> AUTHORIZE/ADMIT (terminal Door) phase for composed rails: `base.run_phase` invokes exactly the
+> components the Schedule places at that phase, in order, fail-closed (merge stays on RESOLVE for its
+> Policy — §8). Two consequences fold into the map above: (1) the egress frozen-mandate lifecycle
+> guard — formerly two INLINE checks bundled into the Bind breath — is now the first-class marked
+> **`MandateFreshness`** Bind-class component, so the schedule MODELS it (a second `bind` step in
+> `EGRESS_SCHEDULE`) and the verification's egress-Bind disclosure asymmetry is dissolved, not
+> caveated; (2) the merge Bind/Door and egress Bind/Policy/Door now fire via `base.run_phase` (their
+> legacy hooks remain DEFINED and delegate to the same components — no drift, no second
+> implementation). The faithfulness tests (§3) re-derive the egress sequence as four marks and still
+> pass; `test_golden_unchanged` is byte-for-byte preserved.
 
 Declared schedules (`schedule.py`), side by side with the observed sequence the faithfulness tests
 re-derive at runtime:
 
 ```
 RESOLUTION RAIL (merge)  MERGE_SCHEDULE              ADMISSION RAIL (egress)  EGRESS_SCHEDULE
-  policy:allowlist @ RESOLVE                           bind   @ ADMIT
-  policy:fence     @ RESOLVE                           policy @ ADMIT
-  bind             @ AUTHORIZE                          door   @ ADMIT
-  door             @ AUTHORIZE
+  policy:allowlist @ RESOLVE                           bind   @ ADMIT   (EffectKeyOneShot.recheck)
+  policy:fence     @ RESOLVE                           bind   @ ADMIT   (MandateFreshness)
+  bind             @ AUTHORIZE                          policy @ ADMIT
+  door             @ AUTHORIZE                          door   @ ADMIT
 ```
 
 Both are verified faithful in `tests/test_rail_schedule.py` (§3): a full passing run of each rail is

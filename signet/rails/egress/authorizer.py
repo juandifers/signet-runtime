@@ -24,16 +24,39 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Callable, Dict, Optional, Tuple
 
-from ...authorizers.base import AuthorizationResult, Authorizer
+from ...authorizers.base import (AuthorizationResult, Authorizer, ComponentOutcome,
+                                 ScheduledComponent)
 from ... import chain
 from ...models import ExecutionRequest, ExecutionToken
 from ...broker.mandate import MandateProvider
 from ...rail_algebra import (Capability, Composition, EGRESS_SCHEDULE, Effect, EffectKeyOneShot,
                              NetworkSolePath, PatternAllowlist, Phase, phase_scope)
+from ...rail_algebra.schedule import BIND, DOOR, POLICY, mark
 from .chain_adapter import effect_from_request
 from .effect import EgressEffect
 from .mandate import EgressStandingPolicy, effective_admits
 from .resolver import TrustedResolver, is_ip_literal
+
+
+class MandateFreshness:
+    """A Bind-class lifecycle component (marks BIND, fires @ ADMIT): the frozen task mandate EXISTS
+    and is NOT expired, recording `last_mandate_hash` as a side effect. It promotes the two formerly
+    INLINE egress lifecycle guards (no-frozen-mandate / mandate-expired) into a first-class scheduled
+    component (PROMOTION.md A2), so (a) the driven ADMIT phase still enforces them
+    (COMPONENT-COMPLETENESS — no guard silently dropped), and (b) the schedule faithfully MODELS what
+    runs (it is a marked BIND step between Bind and Policy in EGRESS_SCHEDULE), dissolving the
+    disclosure asymmetry the schedule verification flagged. The two guards + the side effect live in
+    the rail's `check` callable; this component only marks + adapts the verdict."""
+
+    label = BIND
+
+    def __init__(self, check: Callable[[], Tuple[bool, str]]):
+        self._check = check
+
+    def invoke(self) -> ComponentOutcome:
+        mark(BIND)                                          # phase from the rail's active phase_scope
+        ok, reason = self._check()
+        return ComponentOutcome(ok, reason)
 
 
 class EgressAuthorizer(Authorizer):
@@ -109,42 +132,80 @@ class EgressAuthorizer(Authorizer):
                 None)
 
     # ============================================================================
-    # the two template hooks (base.Authorizer.authorize owns verify_token + the order)
+    # the ADMIT-phase components (the single source of truth for Bind / MandateFreshness / Policy /
+    # Door; shared by the schedule-driven path and the legacy hooks; the caller sets the phase_scope)
     # ============================================================================
-    def recheck_against_context(self, token: ExecutionToken,
-                                req: ExecutionRequest) -> Tuple[bool, str]:
-        # ADMISSION rail: Bind + Policy both fire at the single ADMIT phase (EGRESS_SCHEDULE).
-        with phase_scope(Phase.ADMIT):
-            # Bind — TOCTOU freshness (chain_hash bound + effect == signed Cart).
-            if not self.composition.bind.recheck(token, req):
-                return False, self._bind_reason(token, req)
+    def _check_mandate_freshness(self, req: ExecutionRequest) -> Tuple[bool, str]:
+        """The frozen-mandate lifecycle guard: the mandate EXISTS and is NOT expired (and record its
+        hash). The body MandateFreshness wraps — preserves the two guards + the side effect exactly
+        as the formerly-inline code did (BEHAVIOR-PRESERVED / COMPONENT-COMPLETENESS)."""
+        mandate = self._mandates.get(req.context.task_id)
+        if mandate is None:
+            return False, "no-frozen-mandate"
+        self.last_mandate_hash = mandate.mandate_hash()     # PRESERVE the side effect
+        if mandate.is_expired(self._clock()):
+            return False, "mandate-expired"
+        return True, "mandate-fresh"
 
-            # Bind — frozen-mandate lifecycle (the capability's authorization envelope).
-            eff = effect_from_request(req)
-            mandate = self._mandates.get(req.context.task_id)
-            if mandate is None:
-                return False, "no-frozen-mandate"
-            self.last_mandate_hash = mandate.mandate_hash()
-            if mandate.is_expired(self._clock()):
-                return False, "mandate-expired"
+    def _bind_outcome(self, token: ExecutionToken, req: ExecutionRequest) -> ComponentOutcome:
+        """Bind @ ADMIT: EffectKeyOneShot.recheck (TOCTOU: chain_hash bound + effect == signed Cart)."""
+        if self.composition.bind.recheck(token, req):
+            return ComponentOutcome(True)
+        return ComponentOutcome(False, self._bind_reason(token, req))
 
-            # Policy — destination within mandate ∩ standing (raw-IP via trusted resolution).
-            verdict = self.composition.policy.decide(
-                self.composition.policy.project(mandate, eff))
-            return verdict.is_allow, verdict.reason
+    def _policy_outcome(self, req: ExecutionRequest) -> ComponentOutcome:
+        """Policy @ ADMIT: destination within mandate ∩ standing (raw-IP via trusted resolution).
+        The mandate is guaranteed present here — MandateFreshness gates it earlier in the schedule."""
+        eff = effect_from_request(req)
+        mandate = self._mandates.get(req.context.task_id)
+        verdict = self.composition.policy.decide(self.composition.policy.project(mandate, eff))
+        return ComponentOutcome(verdict.is_allow, verdict.reason)
 
-    def produce_capability(self, token: ExecutionToken,
-                           req: ExecutionRequest) -> AuthorizationResult:
-        """The inline admission decision via the Door. Reached ONLY after verify_token + recheck
-        pass. No bearer token is produced — the proxy forwards the connection to the bound
-        destination."""
+    def _door_result(self, token: ExecutionToken,
+                     req: ExecutionRequest) -> AuthorizationResult:
+        """Door @ ADMIT: the inline admission via NetworkSolePath. Returns the final
+        AuthorizationResult; never calls on_rejected (matches the legacy produce_capability)."""
         eff = effect_from_request(req)
         cap = Capability(effect=eff, lifecycle=self.composition.bind.lifecycle(), handle=token)
-        with phase_scope(Phase.ADMIT):                      # Door @ ADMIT (same phase as Bind/Policy)
-            outcome = self.composition.door.enforce(cap)
+        outcome = self.composition.door.enforce(cap)
         if isinstance(outcome, Effect):
             return AuthorizationResult(True, outcome.detail, payment_ref=outcome.ref, rail=self.rail)
         return AuthorizationResult(False, outcome.reason, payment_ref=outcome.ref, rail=self.rail)
+
+    # -- COMPOSED path: the components base.run_phase drives at ADMIT, in EGRESS_SCHEDULE order
+    #    (private plumbing — the public content surface stays the two hooks) --
+    def _components_for(self, phase, token: ExecutionToken, req: ExecutionRequest):
+        if phase is not Phase.ADMIT:
+            return []
+        freshness = MandateFreshness(lambda: self._check_mandate_freshness(req))
+        return [
+            ScheduledComponent(BIND, lambda: self._bind_outcome(token, req)),
+            ScheduledComponent(BIND, freshness.invoke),     # MandateFreshness (Bind-class)
+            ScheduledComponent(POLICY, lambda: self._policy_outcome(req)),
+            ScheduledComponent(DOOR, lambda: self._door_result(token, req), is_door=True),
+        ]
+
+    # ============================================================================
+    # the two template hooks remain DEFINED (the ABC requires them; tests assert they are in
+    # EgressAuthorizer.__dict__). The composed rail reaches the components via authorize() instead;
+    # these delegate to the SAME components so there is one implementation, no drift.
+    # ============================================================================
+    def recheck_against_context(self, token: ExecutionToken,
+                                req: ExecutionRequest) -> Tuple[bool, str]:
+        with phase_scope(Phase.ADMIT):                      # Bind -> MandateFreshness -> Policy @ ADMIT
+            out = self._bind_outcome(token, req)
+            if not out.ok:
+                return False, out.reason
+            ok, reason = self._check_mandate_freshness(req)
+            if not ok:
+                return False, reason
+            out = self._policy_outcome(req)
+            return out.ok, out.reason
+
+    def produce_capability(self, token: ExecutionToken,
+                           req: ExecutionRequest) -> AuthorizationResult:
+        with phase_scope(Phase.ADMIT):                      # Door @ ADMIT
+            return self._door_result(token, req)
 
 
 # Keep `effective_admits` reachable for any caller that imported it via this module historically.
