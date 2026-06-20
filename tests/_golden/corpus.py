@@ -117,6 +117,34 @@ def _egress_broker() -> EgressBroker:
                                ttl_seconds=60)
 
 
+def _egress_broker_expired() -> EgressBroker:
+    """A broker whose frozen mandate grants api.allowed.test:443 but EXPIRED before the clock
+    (2026-06-11 11:00 < 12:00). TOCTOU binds and the destination IS policy-clean, so the ONLY thing
+    that can block is the mandate-lifecycle guard -> this row characterizes 'mandate-expired'."""
+    resolver = StubResolver({"api.allowed.test": Resolution("127.0.0.1", 9101)})
+    mandates = MandateProvider()
+    mandates.register(EgressMandate("task-expired", (EgressGrant("api.allowed.test", (443,)),),
+                                    expires_at="2026-06-11T11:00:00+00:00"))
+    standing = EgressStandingPolicy((EgressGrant("api.allowed.test", (80, 443, 22)),))
+    clock = lambda: _dt.datetime(2026, 6, 11, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    return EgressBroker.create(mandates=mandates, standing=standing,
+                               receipts=LocalReceiptLog("golden:egress-expired"),
+                               task_id="task-expired", resolver=resolver, clock=clock,
+                               ttl_seconds=60)
+
+
+def _egress_broker_no_mandate() -> EgressBroker:
+    """A broker whose task_id has NO registered frozen mandate. TOCTOU binds, but no mandate exists
+    -> this row characterizes 'no-frozen-mandate' (the missing-mandate lifecycle guard)."""
+    resolver = StubResolver({"api.allowed.test": Resolution("127.0.0.1", 9101)})
+    standing = EgressStandingPolicy((EgressGrant("api.allowed.test", (80, 443, 22)),))
+    clock = lambda: _dt.datetime(2026, 6, 11, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    return EgressBroker.create(mandates=MandateProvider(), standing=standing,
+                               receipts=LocalReceiptLog("golden:egress-nomandate"),
+                               task_id="task-missing", resolver=resolver, clock=clock,
+                               ttl_seconds=60)
+
+
 def egress_verdicts() -> List[Dict]:
     broker = _egress_broker()
     cases = [
@@ -130,6 +158,16 @@ def egress_verdicts() -> List[Dict]:
     for label, host, port in cases:
         adm = broker.admit(host, port)
         out.append({"label": label, "host": host, "port": port,
+                    "admitted": bool(adm.admitted), "cause": adm.cause})
+
+    # ---- the mandate-LIFECYCLE rows (SCHEDULE.md PROMOTION §3.1) ----
+    # These characterize the two egress Bind-class lifecycle guards (frozen-mandate exists + not
+    # expired) on a destination that is otherwise policy-clean, so a verdict change can ONLY mean a
+    # dropped guard. Committed BEFORE the schedule-driven promotion so BEHAVIOR-PRESERVED catches it.
+    for label, broker_fn in (("mandate_expired", _egress_broker_expired),
+                             ("no_frozen_mandate", _egress_broker_no_mandate)):
+        adm = broker_fn().admit("api.allowed.test", 443)
+        out.append({"label": label, "host": "api.allowed.test", "port": 443,
                     "admitted": bool(adm.admitted), "cause": adm.cause})
     return out
 

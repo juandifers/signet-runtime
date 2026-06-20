@@ -34,6 +34,20 @@
       "host": "127.0.0.1",
       "label": "raw_ip_evasion",
       "port": 9103
+    },
+    {
+      "admitted": false,
+      "cause": "mandate-expired",
+      "host": "api.allowed.test",
+      "label": "mandate_expired",
+      "port": 443
+    },
+    {
+      "admitted": false,
+      "cause": "no-frozen-mandate",
+      "host": "api.allowed.test",
+      "label": "no_frozen_mandate",
+      "port": 443
     }
   ],
   "merge": {
