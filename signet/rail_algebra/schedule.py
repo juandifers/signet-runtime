@@ -90,6 +90,19 @@ class Schedule:
     def phases(self) -> Tuple[Phase, ...]:
         return tuple(s.phase for s in self.steps)
 
+    def steps_for(self, phase: Phase) -> Tuple[Step, ...]:
+        """The Steps scheduled at `phase`, in declared order — what a schedule-driven authorizer
+        invokes when it drives that phase (PROMOTION.md). Empty if no component fires there; a
+        driver treats an empty-but-required phase as FAIL-CLOSED, never an implicit allow."""
+        return tuple(s for s in self.steps if s.phase == phase)
+
+    def driven_phase(self) -> Optional[Phase]:
+        """The terminal phase a single authorizer is responsible for driving: the phase of the last
+        Step (always the Door). For merge that is AUTHORIZE (its Policy at RESOLVE is owned UPSTREAM
+        by the resolver seam — NOT driven here, see PROMOTION.md §8); for egress it is ADMIT. None
+        for an empty schedule."""
+        return self.steps[-1].phase if self.steps else None
+
 
 # ============================================================================
 # Observation machinery — strategies self-mark; rails set the phase; tests observe
@@ -152,10 +165,15 @@ MERGE_SCHEDULE = Schedule(
      Step(DOOR, Phase.AUTHORIZE)),
     name="merge")
 
-# ADMISSION RAIL (egress): all three axes fire at the single inline-admission point, in the order
-# the authorizer's two hooks invoke them: Bind.recheck, then Policy.decide, then Door.enforce.
+# ADMISSION RAIL (egress): every axis fires at the single inline-admission point, in the order the
+# driven schedule invokes them: Bind.recheck (TOCTOU), then MandateFreshness (the frozen-mandate
+# lifecycle guard — Bind-class, marks BIND), then Policy.decide, then Door.enforce. MandateFreshness
+# is a FIRST-CLASS marked component (PROMOTION.md A2): promoting the two formerly-inline egress
+# lifecycle guards (no-frozen-mandate / mandate-expired) here makes the schedule model what actually
+# runs, so SCHEDULE-FAITHFUL covers them and the schedule can DRIVE the ADMIT phase.
 EGRESS_SCHEDULE = Schedule(
-    (Step(BIND, Phase.ADMIT),
+    (Step(BIND, Phase.ADMIT),       # EffectKeyOneShot.recheck — chain-bind + effect == Cart
+     Step(BIND, Phase.ADMIT),       # MandateFreshness — frozen mandate exists AND is not expired
      Step(POLICY, Phase.ADMIT),
      Step(DOOR, Phase.ADMIT)),
     name="egress")

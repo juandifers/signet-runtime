@@ -55,22 +55,49 @@ class Decision:
         return self.outcome is Outcome.ALLOW
 
 
+_SHAPES = frozenset({"resolution", "admission"})
+
+
 @runtime_checkable
 class RailBinding(Protocol):
     """Adapts ONE certified rail to the seam. The GitHub binding wraps the existing merge
-    pipeline; it rewrites NO rail logic and ships NO fence of its own."""
+    pipeline; it rewrites NO rail logic and ships NO fence of its own.
+
+    A binding declares its `shape` — the rail FAMILY the seam routes by (the reshape that
+    SEAM-SHAPE-OVERFIT earned, confirmed by two independent admission rails):
+
+      * "resolution" — pick one owned candidate out of a `world`, then authorize the bound
+        effect. `proposal_for` returns a Role-B `Resolver`; the bound effect is authorized
+        through the seam's single `env.verifier`; cardinality>=2 / a human-approval tier can
+        `resume`. (merge)
+      * "admission"  — the effect is SELF-DESCRIBING (a destination, a db op); the only
+        question is admit-or-deny. `proposal_for` is an honest identity-prepare (returns the
+        effect); the kernel policy is EFFECT-SCOPED, so the binding mints a PER-EFFECT verifier
+        (it does NOT read `env.verifier`); admission is binary — there is NO `resume`, and the
+        seam REFUSES one structurally (RESUME-SHAPE-GATED). (egress, supabase)
+
+    The verifier is therefore BINDING-DETERMINED and correlates with shape — the seam no longer
+    claims one authoritative `env.verifier` (face 2 of the over-fit, now honest in the contract).
+    """
     name: str
+    shape: str                       # "resolution" | "admission"  (the rail family the seam routes by)
 
     def handles(self, eff: ProposedEffect) -> bool: ...
 
-    def resolver_for(self, proposal):
-        """Coerce a RAW agent pick (an owned id, an iterable of ids, or None) into the rail's
-        Role-B `Resolver`, so the EXISTING resolve_task_mandate runs the clamp + cardinality +
-        gate on it. A `Resolver` (anything with `.resolve`) passed to the seam is used as-is."""
+    def proposal_for(self, proposal):
+        """Prepare the UNTRUSTED proposal into what `submit` consumes.
+
+        - resolution rails: coerce a RAW agent pick (an owned id, an iterable of ids, or None)
+          into the rail's Role-B `Resolver`, so the EXISTING resolve_task_mandate runs the clamp
+          + cardinality + gate on it. A `Resolver` (anything with `.resolve`) passed to the seam
+          is used as-is (the `_is_resolver` path).
+        - admission rails: return the SELF-DESCRIBING effect — an honest identity-prepare, since
+          there is no candidate set to pick from (the operation is read from `eff.args` in
+          `submit`)."""
         ...
 
     def submit(self, eff: ProposedEffect, *, mandate, world, env, bridge, receipts,
-               resolver) -> "Decision": ...
+               proposal) -> "Decision": ...
 
 
 def _is_resolver(obj) -> bool:
@@ -111,11 +138,23 @@ class EffectInterceptor:
         if binding is None:
             return Decision(Outcome.BLOCK, f"no rail binding handles tool {eff.tool!r}",
                             escalation_source="no_binding")
+        shape = getattr(binding, "shape", None)
+        if shape not in _SHAPES:               # SHAPE-COMPLETENESS: unknown/absent shape fails closed
+            return Decision(Outcome.BLOCK,
+                            f"rail binding for tool {eff.tool!r} declares no known shape "
+                            f"(got {shape!r}; expected one of {sorted(_SHAPES)})",
+                            escalation_source="no_binding")
         w = world if world is not None else self.world
         try:
-            resolver = proposer if _is_resolver(proposer) else binding.resolver_for(proposer)
+            # Route by shape (no universal resolver coercion): resolution rails accept a pre-built
+            # Role-B resolver as-is (`_is_resolver`) or wrap a raw pick; admission rails prepare the
+            # self-describing effect. `submit`'s `proposal` is what the rail consumes.
+            if shape == "resolution":
+                proposal = proposer if _is_resolver(proposer) else binding.proposal_for(proposer)
+            else:                              # "admission" — honest identity-prepare, no candidate set
+                proposal = binding.proposal_for(proposer)
             return binding.submit(eff, mandate=self.mandate, world=w, env=self.env,
-                                  bridge=self.bridge, receipts=self.receipts, resolver=resolver)
+                                  bridge=self.bridge, receipts=self.receipts, proposal=proposal)
         except Exception as e:                 # A7 fail closed: a crash is a rejection, not a pass
             return Decision(Outcome.BLOCK, f"fail-closed (binding raised: {e})",
                             escalation_source="gate_contained")
@@ -125,10 +164,15 @@ class EffectInterceptor:
         """Continue an ESCALATE after a human resumed (LangGraph `Command(resume=...)`, the local
         gate's approval, etc.). The handling binding RE-GATES the human's choice and authorizes
         the FROZEN bound effect against the current world — the kernel re-checks the effect-key, so
-        a post-approval mutation is blocked. Approval never widens authority (A3). Fail closed."""
+        a post-approval mutation is blocked. Approval never widens authority (A3). Fail closed.
+
+        RESUME-SHAPE-GATED: only RESOLUTION rails escalate, so resume is valid only for them. The
+        seam REFUSES a resume on an admission binding structurally (not by duck-typing `resume`):
+        NO-ESCALATE-V0 for egress + supabase is a seam-level guarantee, not merely an absent method."""
         binding = self._binding_for(eff)
-        if binding is None or not hasattr(binding, "resume"):
-            return Decision(Outcome.BLOCK, f"no rail binding can resume tool {eff.tool!r}",
+        if binding is None or getattr(binding, "shape", None) != "resolution":
+            return Decision(Outcome.BLOCK,
+                            f"resume not valid for tool {eff.tool!r} (only resolution rails escalate)",
                             escalation_source="no_binding")
         try:
             return binding.resume(eff, decision, approval, mandate=self.mandate,

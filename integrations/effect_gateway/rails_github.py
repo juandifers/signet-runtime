@@ -49,6 +49,7 @@ class GitHubMergeBinding:
     """Binds the GitHub merge rail to the orchestrator-agnostic seam."""
 
     name = "github_merge"
+    shape = "resolution"        # pick one owned candidate out of a world, then authorize the bound effect
 
     def __init__(self, *, repo_id: str, source: Optional[InMemoryPolicySource] = None,
                  principal: str = PRINCIPAL, author: str = "alice"):
@@ -61,7 +62,7 @@ class GitHubMergeBinding:
     def handles(self, eff: ProposedEffect) -> bool:
         return eff.tool in _MERGE_TOOLS
 
-    def resolver_for(self, proposal):
+    def proposal_for(self, proposal):
         """A raw agent pick -> the merge rail's Role-B resolver. A single owned id is a
         one-element set (passes the cardinality rule, so the fence is what contains it); an
         iterable of ids is a set (cardinality>=2 escalates); None/empty means the model
@@ -76,15 +77,16 @@ class GitHubMergeBinding:
         return FixedChoiceResolver(int(proposal), reason="orchestrator tool-call pick")
 
     def submit(self, eff: ProposedEffect, *, mandate, world, env, bridge, receipts,
-               resolver) -> Decision:
+               proposal) -> Decision:
         if world is None:
             return Decision(Outcome.BLOCK, "no runtime world supplied (fail closed)",
                             escalation_source="gate_contained")
         # effective fence = standing PolicySource INTERSECT the frozen mandate (monotonic; only
-        # tightens). The mandate is Role A; the resolver/world are the only runtime channel.
+        # tightens). The mandate is Role A; the proposal (Role-B resolver)/world are the only
+        # runtime channel. `env.verifier` is THIS rail's verifier (resolution shape, face 2).
         effective = resolve_effective_policy(self.source, self.repo_id, self.principal,
                                              mandate.as_task_policy())
-        resolution = resolve_task_mandate(mandate, world, effective, resolver=resolver)
+        resolution = resolve_task_mandate(mandate, world, effective, resolver=proposal)
         return self._to_decision(resolution, effective, world, env, bridge, receipts)
 
     # -- MandateResolution -> Decision ---------------------------------------

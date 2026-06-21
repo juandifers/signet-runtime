@@ -31,11 +31,12 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Tuple
 
-from .base import AuthorizationResult, Authorizer
+from .base import AuthorizationResult, Authorizer, ComponentOutcome, ScheduledComponent
 from .. import chain
 from ..models import ExecutionRequest, ExecutionToken
-from ..rail_algebra import (Capability, Effect, EffectKeyOneShot, ExternalEnforcer, MERGE_SCHEDULE,
-                            Phase, phase_scope)
+from ..rail_algebra import (Capability, Composition, Effect, EffectKeyOneShot, ExternalEnforcer,
+                            MERGE_SCHEDULE, Phase, phase_scope)
+from ..rail_algebra.schedule import BIND, DOOR
 
 
 class GitHubRail(ABC):
@@ -100,6 +101,12 @@ class GitHubRailBridge(Authorizer):
         self.bind = EffectKeyOneShot(recheck_fn=self._chain_bound)
         self.door = ExternalEnforcer(perform=self._conclude_success,
                                      decline=self._conclude_failure)
+        # COMPOSED rail: declaring a Composition with the MERGE_SCHEDULE routes authorize() through
+        # the schedule-driven path (base.run_phase). Policy is None HERE because the merge Policy
+        # fires UPSTREAM at RESOLVE (the resolver seam), not at this authorizer's AUTHORIZE phase
+        # (PHASE-ISOLATION). The driven phase is AUTHORIZE = [Bind, Door] (PROMOTION.md).
+        self.composition = Composition(policy=None, bind=self.bind, door=self.door,
+                                       name="github", schedule=MERGE_SCHEDULE)
 
     @staticmethod
     def _context_matches_cart(req: ExecutionRequest) -> bool:
@@ -147,32 +154,53 @@ class GitHubRailBridge(Authorizer):
     def _cap(self, token: ExecutionToken, req: ExecutionRequest) -> Capability:
         return Capability(effect=req, lifecycle=self.bind.lifecycle(), handle=token)
 
-    # -- the two template hooks; base.Authorizer.authorize owns verify_token + the order --
-    def recheck_against_context(self, token: ExecutionToken,
-                                req: ExecutionRequest) -> Tuple[bool, str]:
-        """Independent re-check (no side effect) via EffectKeyOneShot.recheck. Fail closed on any
-        mismatch (head_sha/base/path substitution or unbound token)."""
-        with phase_scope(Phase.AUTHORIZE):                  # Bind @ AUTHORIZE (MERGE_SCHEDULE)
-            if not self.bind.recheck(token, req):
-                return (False, "Effect/context mismatch vs the approved Cart "
-                               "(head_sha/base/path substitution or unbound token).")
-        return True, "bound to this transaction"
+    # -- the Bind + Door invocations as schedule components (the single source of truth, shared by
+    #    the driven path and the legacy hooks; the caller establishes the phase_scope) --
+    def _bind_outcome(self, token: ExecutionToken, req: ExecutionRequest) -> ComponentOutcome:
+        """Bind @ AUTHORIZE: EffectKeyOneShot.recheck (fail-closed on any mismatch)."""
+        if self.bind.recheck(token, req):
+            return ComponentOutcome(True, "bound to this transaction")
+        return ComponentOutcome(False, "Effect/context mismatch vs the approved Cart "
+                                       "(head_sha/base/path substitution or unbound token).")
 
-    def on_rejected(self, token: ExecutionToken, req: ExecutionRequest, reason: str) -> None:
-        """Rail-native record of a rejection: conclude the required Check Run as FAILURE, bound to
-        the token's chain_hash (so the protected merge demonstrably did NOT proceed)."""
-        self.door.decline(self._cap(token, req), reason)
-
-    def produce_capability(self, token: ExecutionToken,
-                           req: ExecutionRequest) -> AuthorizationResult:
-        """Conclude the required Check Run as success -> the protected-branch merge gate is
-        satisfied. Only the enforcer can do this. Reached ONLY after both guards pass."""
+    def _door_result(self, token: ExecutionToken,
+                     req: ExecutionRequest) -> AuthorizationResult:
+        """Door @ AUTHORIZE: conclude the required Check Run as success (the EXTERNAL branch-
+        protection gate). Returns the final AuthorizationResult; never calls on_rejected."""
         self._last_check_ref = None
-        with phase_scope(Phase.AUTHORIZE):                  # Door @ AUTHORIZE (MERGE_SCHEDULE)
-            outcome = self.door.enforce(self._cap(token, req))
+        outcome = self.door.enforce(self._cap(token, req))
         if isinstance(outcome, Effect):
             return AuthorizationResult(
                 True, "Check Run concluded success; protected-branch merge gate satisfied.",
                 payment_ref=outcome.ref, rail=self.rail)
         return AuthorizationResult(False, outcome.reason,
                                    payment_ref=self._last_check_ref, rail=self.rail)
+
+    # -- COMPOSED path: the components base.run_phase drives at AUTHORIZE, in MERGE_SCHEDULE order
+    #    (private plumbing — the public content surface stays the two hooks) --
+    def _components_for(self, phase, token: ExecutionToken, req: ExecutionRequest):
+        if phase is not Phase.AUTHORIZE:
+            return []                                       # Policy is owned at RESOLVE, not here
+        return [
+            ScheduledComponent(BIND, lambda: self._bind_outcome(token, req)),
+            ScheduledComponent(DOOR, lambda: self._door_result(token, req), is_door=True),
+        ]
+
+    def on_rejected(self, token: ExecutionToken, req: ExecutionRequest, reason: str) -> None:
+        """Rail-native record of a rejection: conclude the required Check Run as FAILURE, bound to
+        the token's chain_hash (so the protected merge demonstrably did NOT proceed)."""
+        self.door.decline(self._cap(token, req), reason)
+
+    # -- the two template hooks remain DEFINED (the ABC requires them; conformance asserts their
+    #    presence). The composed rail no longer reaches them via authorize() — they delegate to the
+    #    same components so there is ONE implementation of the Bind/Door content (no drift). --
+    def recheck_against_context(self, token: ExecutionToken,
+                                req: ExecutionRequest) -> Tuple[bool, str]:
+        with phase_scope(Phase.AUTHORIZE):                  # Bind @ AUTHORIZE (MERGE_SCHEDULE)
+            out = self._bind_outcome(token, req)
+        return out.ok, out.reason
+
+    def produce_capability(self, token: ExecutionToken,
+                           req: ExecutionRequest) -> AuthorizationResult:
+        with phase_scope(Phase.AUTHORIZE):                  # Door @ AUTHORIZE (MERGE_SCHEDULE)
+            return self._door_result(token, req)
