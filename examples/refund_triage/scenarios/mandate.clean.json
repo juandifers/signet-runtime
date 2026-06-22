@@ -1,0 +1,9 @@
+{
+  "task_id": "refund-triage-001",
+  "database": "app",
+  "grants": [
+    { "schema": "public", "table": "credits", "ops": ["select", "insert"] }
+  ],
+  "expires_at": null,
+  "signature": null
+}
