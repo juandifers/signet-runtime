@@ -34,6 +34,11 @@ eval = ["agentdojo>=0.1.35"]
 # The LIVE GitHub rail-bridge (L3 manual test) — outbound to api.github.com only.
 # Not needed for the offline tests/demos; imported lazily by evals/github_railbridge/live_rail.py.
 l3-github = ["pyjwt[crypto]>=2.8", "requests>=2.31"]
+# The LangGraph refund-triage demo (examples/refund_triage/*). Needs langgraph for the StateGraph
+# and the supabase rail crypto; the test module `pytest.importorskip("langgraph")` so the suite
+# stays green without this extra. The `llm` resolver is gated behind SIGNET_REFUND_LLM=1 (no CI
+# live calls).
+refund-demo = ["langgraph>=0.2", "pyjwt[crypto]>=2.8", "cryptography>=41"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

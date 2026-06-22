@@ -16,6 +16,11 @@ _EXPORTS = {
     "IntentMandate": ".models", "CartMandate": ".models", "PaymentMandate": ".models",
     "RuntimeContext": ".models", "ExecutionRequest": ".models", "ExecutionToken": ".models",
     "Decision": ".models", "Receipt": ".models",
+    # The on-ramp facade (the blessed DX surface, spec §5). ABSOLUTE module path: the implementation
+    # lives with the demo rails it wires (examples/onramp). Lazy like everything here, so `import
+    # signet` stays light and a core-only checkout pays nothing — `signet.guard` triggers the import
+    # only on first access (and reports a teaching error if the examples tree / a rail extra is absent).
+    "guard": "examples.onramp", "Mandate": "examples.onramp", "SignetConfig": "examples.onramp",
 }
 
 __all__ = list(_EXPORTS)
@@ -25,7 +30,10 @@ def __getattr__(name):
     mod = _EXPORTS.get(name)
     if mod is None:
         raise AttributeError(f"module 'signet' has no attribute {name!r}")
-    value = getattr(import_module(mod, __name__), name)
+    # Relative paths (".verifier") resolve within `signet`; an absolute path ("examples.onramp") is
+    # imported as-is (the on-ramp facade re-export — implementation kept out of the kernel package).
+    pkg = __name__ if mod.startswith(".") else None
+    value = getattr(import_module(mod, pkg), name)
     globals()[name] = value          # cache: next access skips __getattr__
     return value
 
