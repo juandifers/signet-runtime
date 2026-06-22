@@ -55,7 +55,7 @@ flowchart TD
     DOOR --> R["Signed receipt, RFC-6962 log"]
 ```
 
-The part I'm most pleased with is that one gate handles two structurally different kinds of door, and the cryptographic kernel never learns the difference:
+Handles two structurally different kinds of door, and the cryptographic kernel never learns the difference:
 
 - **Capability-issuing doors** — the database. A separate broker mints a short-lived, scoped token; the agent holds it for a moment; the database itself enforces the scope. At Tier 1 the broker runs as a *different OS user* that owns the signing key, so the agent's process can't read it. That's an operating-system guarantee, not a policy I wrote in Python.
 - **Effect-performing doors** — network egress. A proxy makes the connection or refuses it. The agent holds nothing; the proxy is the only thing with network authority.
