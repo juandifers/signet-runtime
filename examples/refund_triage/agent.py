@@ -272,21 +272,27 @@ def resolve_tier(tier: str, socket_path: Optional[str]) -> str:
 def run_scenario(*, scenario: str, attack: Optional[str] = None,
                  resolver: str = "deterministic", mandate_path: Optional[Path] = None,
                  clock=None, tier: str = "0", socket_path: Optional[str] = None,
-                 jwks_path: Optional[str] = None) -> RunResult:
+                 jwks_path: Optional[str] = None, door: Optional[Door] = None) -> RunResult:
     """Build the door (Tier 0 in-proc, or Tier 1 over the broker socket), freeze the mandate, run
-    the graph once, return a structured result. Single entry point for run.py and the tests."""
+    the graph once, return a structured result. Single entry point for run.py and the tests.
+
+    ADDITIVE `door` injection (default None = unchanged): when a pre-built `Door` is passed, it is
+    used verbatim instead of building one from `tier`/`socket_path`. The on-ramp faithfulness test
+    (`tests/test_onramp.py`) passes a `guard()`-assembled door to prove the facade reproduces the
+    hand-wired run byte-for-byte. No behavior change for existing callers (they pass no `door`)."""
     case = effects.resolve_case(scenario, attack)
-    mandate = load_mandate(mandate_path)
-    resolved = resolve_tier(tier, socket_path)
-    if resolved == "1":
-        sock = _broker_socket(socket_path)
-        jwks = jwks_path or os.environ.get("SIGNET_BROKER_JWKS")
-        if not sock or not jwks:
-            raise RuntimeError("Tier 1 needs SIGNET_BROKER_SOCK + SIGNET_BROKER_JWKS "
-                               "(or socket_path/jwks_path)")
-        door = build_tier1_door(mandate, socket_path=sock, jwks_path=jwks, clock=clock)
-    else:
-        door = build_door(mandate, clock=clock)
+    if door is None:
+        mandate = load_mandate(mandate_path)
+        resolved = resolve_tier(tier, socket_path)
+        if resolved == "1":
+            sock = _broker_socket(socket_path)
+            jwks = jwks_path or os.environ.get("SIGNET_BROKER_JWKS")
+            if not sock or not jwks:
+                raise RuntimeError("Tier 1 needs SIGNET_BROKER_SOCK + SIGNET_BROKER_JWKS "
+                                   "(or socket_path/jwks_path)")
+            door = build_tier1_door(mandate, socket_path=sock, jwks_path=jwks, clock=clock)
+        else:
+            door = build_door(mandate, clock=clock)
     graph = build_graph(door, scenario=scenario, attack=attack, resolver=resolver)
     state = graph.invoke({}, {"configurable": {"thread_id": f"refund-{scenario}-{attack or 'x'}"}})
     return RunResult(scenario=scenario, attack=attack, resolver=resolver, case=case,

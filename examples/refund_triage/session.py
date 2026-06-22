@@ -168,14 +168,18 @@ def _combined_effect_record(seq: int, r) -> dict:
     }
 
 
-def build_combined_session(*, clock=None) -> dict:
+def build_combined_session(*, clock=None, door=None) -> dict:
     """One agent, two rails, one session: the legitimate DB credit (ALLOW) and the injected egress
     exfil (BLOCK, advisory). Read-only — re-runs the unchanged doors and serialises the result.
 
     The egress effect carries `rail:"egress"`, `performed:{egress:"blocked"}`, and an `advisory`
-    note — it renders in the viewer with NO viewer change (the timeline iterates effects[])."""
+    note — it renders in the viewer with NO viewer change (the timeline iterates effects[]).
+
+    ADDITIVE `door` injection (default None = unchanged): a pre-built `CombinedDoor` is threaded
+    through to `run_combined`, so the on-ramp can serialise a session off a `guard()`-assembled door
+    and the faithfulness test can assert byte-identity with the hand-wired session."""
     from .egress import run_combined
-    mandate, results, tier = run_combined(clock=clock)
+    mandate, results, tier = run_combined(clock=clock, door=door)
     records = [_combined_effect_record(i, r) for i, r in enumerate(results, start=1)]
     return {
         "session_id": "refund-triage-combined",
