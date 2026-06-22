@@ -14,6 +14,25 @@ don't get re-litigated, and the invariants that must survive any refactor.
 > (The local gate is containment UX + tamper-evident receipts, not the enforcement
 > boundary — see LOCAL_GATE.md.)
 
+## Working discipline — before you touch anything
+
+These rank with the runtime invariants: violating them is on par with a fabricated result
+(invariant 14, extended from containment claims to repo claims). They exist because a session once
+built on a checkout 4 commits behind `origin/main`, found a file locally absent, and reported it
+"removed in <commit>" — a fabricated git attribution that `git show` flatly contradicted, caught
+only because the work had been pushed and was checkable against origin.
+
+- **BASE-CHECK (orient step zero).** Before any orient, any claim about the repo, or any build:
+  `git fetch origin && git status`. Confirm you are at `origin/main` (0 behind), or KNOW and STATE
+  your delta. Never reason, claim, or build on a tree behind origin — a stale tree's absences are
+  not facts about the repo.
+- **REPO-CLAIMS-CITE.** Every statement about repo history or contents carries the command output
+  that proves it. No commit attribution without `git show <sha> --stat`. No "added / removed /
+  only-X-remains / absent" without the diff (`git log --diff-filter=D --follow <path>`,
+  `git cat-file -e origin/main:<path>`). Local absence is NEVER evidence of removal — check origin.
+  A test count is `pytest -q --co | tail -1`, not a remembered number. Inferring a repo fact from
+  local state without checking origin is a fabrication, ranked with a faked green.
+
 ## What this is
 
 Runtime enforcement for AP2-style agent payment mandates. AP2 produces a signed
@@ -28,7 +47,8 @@ chain executes once, in context, under policy — and anchors proof that it did.
 
 ```bash
 pip install -e ".[dev]"          # core (pydantic, pynacl, pyyaml) + test deps (pytest, hypothesis, xrpl-py, pyjwt, cryptography)
-pytest -v                        # 21 attack tests — these are the spec
+pytest -q                        # full suite; `pytest -q --co | tail -1` for the live count
+pytest -q tests/test_attacks.py  # the 21-attack KERNEL spec (each test = one attack)
 python -m demos.role2_demo       # rail-agnostic block/execute + receipt log
 python -m demos.role1_xrpl_demo  # XRPL 2-of-2: agent-alone fails quorum
 python -m demos.mpc_demo         # MPC 2-of-2 threshold: agent-alone can't sign
@@ -40,6 +60,10 @@ Extras: `.[dev]` runs the full suite (the agentdojo eval skips cleanly without `
 
 **The tests are the specification.** Each test is one attack. Keep them green.
 When adding a defense, add the attack test that proves it first.
+
+`test_attacks.py` is the kernel spec (21 attacks); the broker batteries, the rail bindings, the seam
+reshape, and the orchestrator middleware each carry their own attack/acceptance suites — the full count
+is whatever `pytest -q --co | tail -1` reports, not a number pinned in this doc.
 
 ## Architecture — the one rule
 
@@ -53,6 +77,17 @@ that decision into a rail-specific *necessary input*.
   capability unless the token is valid, unexpired, and bound to *this* exact
   transaction. Re-check destination/amount against `req.context` inside the
   authorizer (see `xrpl_cosigner.cosign`).
+
+**A third layer sits above the kernel and the authorizers: the orchestrator-agnostic SEAM**
+(`integrations/effect_gateway/seam.py`). Where an authorizer adapts the kernel's *decision* to a
+*rail*, the seam adapts a *rail* to an *orchestrator* (LangGraph today; others next). Its contract is
+`RailBinding: {ProposedEffect → Decision[ALLOW|BLOCK|ESCALATE]}`. The seam declares two rail SHAPES —
+**resolution** (pick one owned candidate from a world, then authorize — e.g. merge) and **admission**
+(admit a self-describing effect directly — e.g. egress, db). Do NOT re-add the resolution-only
+assumption (`resolver_for`, a candidate-picker for every proposal): it was reshaped out
+(`resolver_for → proposal_for`, a `shape` declaration) on two independent admission votes (egress,
+supabase). Authoritative detail lives in `integrations/effect_gateway/SEAM_CONTRACT.register.md`
+(the findings register) and `SEAM_RESHAPE.md` — read those before changing the seam, not this summary.
 
 ## Invariants that must not regress
 
@@ -136,6 +171,28 @@ produce_capability`) and the unchanged kernel `Verifier` (consume-once, signed
 token). A rail fills ONLY the two content hooks (see
 `signet/rails/supabase/authorizer.py`); it never edits the kernel or the template.
 
+### Seam / orchestrator-integration layer (see integrations/effect_gateway/, integrations/langgraph/)
+
+17. **SEAM-SHAPE.** A `RailBinding` DECLARES `shape ∈ {resolution, admission}`; the seam routes by
+    shape and FAILS CLOSED on an unknown/absent shape. `proposal_for` prepares the untrusted proposal
+    (a Role-B `Resolver` for resolution rails; the self-describing effect for admission rails). `resume`
+    is SHAPE-GATED at the seam: only resolution rails escalate, so a `resume` on an admission binding is
+    refused by the seam, not merely absent from the binding (admission is ALLOW/BLOCK only — NO-ESCALATE).
+    The verifier is binding-determined: resolution rails use the shared `env.verifier`; admission rails
+    mint a per-effect verifier. (`SEAM-SHAPE-OVERFIT` resolved by reshape — register entry; preserve all
+    three known-good rails verdict-for-verdict against committed goldens before touching the seam again.)
+18. **MIDDLEWARE-CAPTURE-NOT-BOUNDARY.** The orchestrator adapter (LangGraph `SignetMiddleware` /
+    `signet_guarded_tool`) holds ZERO authority: it CAPTURES the proposed effect and RENDERS the
+    Decision into orchestrator control flow (ALLOW→run, BLOCK→structured refusal, ESCALATE→interrupt).
+    It is never the boundary — the broker/proxy is (ZERO-STANDING-ELEVATED-CRED, extended to the
+    orchestrator). The middleware's interface is INVARIANT across security tiers; only the transport
+    behind it changes: **Tier 0** in-process (advisory; dev), **Tier 1** broker over a Unix socket
+    (structural; the agent holds no key — BROKER-SEPARATE-PRINCIPAL), **Tier 2** netns + egress proxy
+    (structural; the agent holds nothing — EGRESS-SOLE-PATH). Security is a DEPLOYMENT choice (transport
+    + process topology + uids), never agent code. A block from an in-process middleware is meaningful
+    ONLY if the agent has no other path to the effect — so the separation is what makes capture mean
+    anything, not an extra layer on top of it.
+
 ## The verifier pipeline order (signet/verifier.py)
 
 signatures → chain linkage → agent identity → action allowed → TTL → revocation →
@@ -187,18 +244,23 @@ settlement needs network egress to XRPL endpoints (e.g.
 
 ## Highest-value next step
 
-**Done (Role 1b):** the threshold-signature / MPC authorizer — the enforcer holds
-one key share, so it becomes a mandatory co-signer for *every* chain at once rather
-than per-ledger. The rail-agnostic generalization of Role 1; drops into the same
-`Authorizer` interface, kernel untouched. See `signet/authorizers/mpc_cosigner.py`
-(2-of-2 threshold Schnorr over edwards25519) and `demos/mpc_demo.py`. Production
-target is FROST(ed25519) + an MPC nonce-commitment round; the swap seam is isolated
-the same way as `crypto.py` / `canonical.py`.
+**Landed:** the orchestrator-integration seam (`{resolution, admission}` after the reshape on two
+admission votes), the egress + supabase rail bindings, and the LangGraph `SignetMiddleware` with a
+pluggable transport — Tier 0 (in-process, advisory) and Tier 1 (broker over a Unix socket; the agent
+process holds no signing key, obtains only a short-lived effect-bound scoped JWT). See
+`integrations/effect_gateway/SEAM_CONTRACT.register.md` for the live findings (resolved vs. open).
 
-**Now:** the HTTP surface (`signet/api.py`) wires **only** the mock broker. Neither
-the XRPL nor the MPC authorizer is reachable over the API — they run only in tests
-and demos. Exposing a rail-selectable authorizer endpoint (without putting rail
-logic in the kernel) is the next step.
+**Open threads (pick by evidence, not order):**
+- **Tier 2 egress** — make the `EgressProxy` the sole route under the netns (EGRESS-SOLE-PATH); the
+  proxy exists, the netns enforcement is privilege-gated (CAP_NET_ADMIN), so egress stays *advisory*
+  until a Linux host runs `test_netns_egress.py` as a boundary, not a measurement.
+- **Effect-granular resource enforcement** — the supabase resource binds a capability at ROLE
+  granularity, so a scoped JWT is narrower-than-root but not exactly-the-approved-effect
+  (`SEAM-EFFECT-PHASE`, register, [open, watch]). Hardening the PEP to `(table, op)` promotes the
+  cap from "never the root key" to "never wider than the approved effect."
+- **Second orchestrator (OpenAI Agents SDK)** — the cross-platform vote on the reshaped seam: does a
+  different interception model (tripwire guardrails + approval interruptions) fit `{resolution,
+  admission}`? This is the generality claim, and the reason the reshape was done on evidence.
 
 ## File map
 
@@ -222,6 +284,14 @@ signet/rails/          keyholder rails, each fills ONLY base.py's two hooks:
                        egress/   (broker-as-proxy — OS-interposition only-door)
 signet/sandbox/        netns.py — the EGRESS-SOLE-PATH only-door (netns + veth + nft +
                        unprivileged exec); _agent_probe.py. Linux-only; privilege-gated.
+integrations/effect_gateway/   the orchestrator-agnostic SEAM. seam.py (the RailBinding contract +
+                       EffectInterceptor) + rails_github.py (resolution) / rails_egress.py,
+                       rails_supabase.py (admission). SEAM_CONTRACT.register.md (findings register),
+                       SEAM_RESHAPE.md + {EGRESS,SUPABASE}_BINDING.md (authoritative arc reports).
+                       transport.py (CapabilityTransport: in-process Tier 0 / broker Tier 1).
+integrations/langgraph/        the LangGraph adapter. guarded_tool.py (tool-body wrapper) +
+                       middleware.py (SignetMiddleware, the native wrap_tool_call drop-in). Calls the
+                       seam's public intercept/resume; holds NO authority (MIDDLEWARE-CAPTURE-NOT-BOUNDARY).
 signet/fence.py        local path/command fence + .signet/policy.yaml (Stage 1;
                        matching semantics lifted from the GitHub rail MergePolicy)
 signet/cli/            the `signet` console script: hook (PreToolUse local gate),
