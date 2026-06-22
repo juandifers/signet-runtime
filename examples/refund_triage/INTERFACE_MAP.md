@@ -128,3 +128,51 @@ agent itself at runtime (it `os.stat`s the socket; it does not trust an env var)
   triad (`same_uid_peer_refused`, `agent_uid_cannot_read_signing_key`,
   `killed_broker_yields_no_writes`) + the four verdicts at Tier 1, all labeled `structural`.
 - `core_kernel_edits_zero` = `0/10`; full suite 494 passed / 11 skipped; scorecard PASS.
+
+---
+
+# Egress rail (the SECOND rail — one agent, two rails, one session)
+
+Wires the EXISTING egress proxy into the same agent/graph so one frozen task proposes BOTH a DB
+write AND a network egress. Both cross the ONE unchanged `EffectInterceptor` through their own
+`RailBinding`. No kernel / seam / `EffectInterceptor` / broker-transport / `effective_permits`
+edits; DB verdicts unchanged.
+
+## §2 (egress) resolution table
+
+| # | What you need | Repo reality (cited) |
+|---|---|---|
+| 1 | The egress effect type + seam shape | `EgressEffect{host, port, protocol, resolved_ip?}` — bound side is host+port, `resolved_ip` is OUT of the hash (`signet/rails/egress/effect.py:19-39`). Seam shape is **admission** (self-describing destination, admit-or-deny, no resume) — `integrations/effect_gateway/rails_egress.py:7-14`, `seam.py:74-77`. |
+| 2 | The proxy door + allowlist/mandate shape | **`EgressBroker.admit(host, port, protocol, request_nonce) -> AdmissionResult{admitted, cause, receipt_id, forward_ip, forward_port, chain_hash}`** (`signet/broker/proxy.py:88`) — "Inline: **no token is handed out**" (`:50,90`). The forward proxy `EgressProxy` (`proxy.py:157`): CONNECT→`admit`→**200**/splice (`:214-226`) or **403** (`:218`). Allow-set: `EgressMandate{task_id, grants:[EgressGrant{host, ports}]}` ∩ `EgressStandingPolicy`, decided by `effective_admits()` (`signet/rails/egress/mandate.py:59-108`); host match exact-or-`*.suffix`, bare `*` rejected (`:19-28,36-38`). |
+| 3 | `RemoteSupabaseBinding` — the structure to mirror | `tier1.py:59-141`: `name/shape="admission"`, `handles/proposal_for/submit`, a **socket transport** to a separate door, **fail-closed** on `ConnectionRefused/FileNotFound/OSError/timeout` (`:102-106`), maps the response → `Decision`, appends one demo-local signed receipt. |
+| 4 | The `#8` advisory anchor | `tests/test_broker_egress.py:202` (`test_08_NEGATIVE_direct_connection_bypasses_proxy`): a DIRECT connection BYPASSES the proxy and SUCCEEDS — the proxy is **advisory** without a netns. Still passes; the boundary is honestly recorded. |
+| 5 | How the emitter serialises an effect | `examples/refund_triage/session.py` `_combined_effect_record` → `{seq, rail, label, proposed{action,target,detail}, decision, reason, escalation_source, token_minted, performed, receipt_id, receipt_verified, note}`. The egress effect slots in with `rail:"egress"`, `performed:{egress:"blocked"}` — the viewer renders it with NO edit (`viewer/index.html:288`, `performedText` keys on `p.egress`). |
+
+## DIVERGENCE (spec → repo, repo wins — recorded)
+
+The spec's mental model: the egress door is **effect-performing** ("the proxy connects or refuses;
+the agent holds nothing; … if you find yourself minting a token for an egress effect, you have
+broken the model"). The repo ships **two** egress admission surfaces:
+
+1. **In-process seam binding** `integrations/effect_gateway/rails_egress.py:EgressBinding` — a
+   capability-admission rail that drives `EgressBrokerCore.mint_token` (a per-effect kernel
+   consume-once token) and returns `check_ref`. This is the *other* archetype.
+2. **Inline proxy** `signet/broker/proxy.py:EgressBroker`/`EgressProxy` — effect-performing, "no
+   bearer token handed to the agent" (`proxy.py:50,90`, `signet/rails/egress/__init__.py:6-8`).
+
+The spec mandates archetype (2). So the demo's `examples/refund_triage/egress.py:EgressProxyBinding`
+routes to the **proxy** over a CONNECT socket (mirroring `RemoteSupabaseBinding`'s transport), maps
+200/403 → `Decision`, fails closed when the proxy is down, and surfaces **`check_ref=None`** — the
+agent holds nothing. The consume-once token minted *inside* `EgressBroker.admit` is the unchanged
+composition's replay defense, never a bearer capability. The integration `EgressBinding` is left
+unused by the demo (it is the wrong archetype here), and that choice is recorded — not a regression.
+
+## Combined-session statement (advisory → structural)
+
+The combined run (`examples/refund_triage/egress.py:run_combined`) emits one session with two
+effects: **supabase insert credits → ALLOW** (1 row, JWT minted), **egress connect attacker host →
+BLOCK** (0 bytes, advisory, no token). The egress effect is labeled **`advisory (inline proxy)`**;
+the structural upgrade is the netns sole-path (Thread C, `CAP_NET_ADMIN`) — OUT OF SCOPE here, and
+`#8` records that a direct connection bypasses the v0 proxy. Acceptance:
+`tests/test_refund_egress_combined.py` (8 tests). `core_kernel_edits_zero` = `0/10`; full suite
+502 passed / 11 skipped; scorecard PASS.

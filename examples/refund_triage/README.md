@@ -97,10 +97,54 @@ The structural triad (`tests/test_refund_triage_demo.py`):
 `test_tier1_same_uid_peer_refused`, `test_tier1_agent_uid_cannot_read_signing_key`,
 `test_tier1_killed_broker_yields_no_writes`.
 
+## Session viewer (the visual surface)
+
+A self-contained, offline, **read-only** HTML page renders a whole session — the mandate, every
+proposed effect, each verdict + reason, and each receipt — so a room can see what was allowed,
+blocked, and why. It changes no behavior; it only renders emitted data.
+
+```bash
+python3 -m examples.refund_triage.session     # emit viewer/session.json (+ inline it into the page)
+open examples/refund_triage/viewer/index.html # double-click; renders offline, no network
+```
+
+ALLOW reads green, BLOCK red; the A3 honest note shows verbatim; the tier badge is shown exactly as
+emitted (never upgraded). See `viewer/README.md`.
+
+## One agent, two rails, one session (egress)
+
+The same agent, under **one frozen task**, proposes BOTH a database write AND a network egress —
+each crosses the **one** unchanged `EffectInterceptor` through its own `RailBinding`, and they land
+as one session with two effects on two rails. A legitimate credit is **ALLOWED** on the DB rail; an
+injected exfiltration to an external host is **BLOCKED** on the egress rail.
+
+```bash
+pip install -e ".[dev,supabase,refund-demo]"      # langgraph + the egress proxy deps (stdlib sockets)
+
+# emit the two-rail session (DB ALLOW + egress BLOCK) and open the viewer
+python3 -m examples.refund_triage.session --combined    # -> viewer/session.combined.json
+open examples/refund_triage/viewer/index.html           # then “Load session JSON…” -> session.combined.json
+```
+
+**The two door archetypes are kept distinct.** The DB rail is **capability-issuing**: the broker
+mints a scoped JWT the agent presents to Postgres (the PEP). The egress rail is **effect-performing**:
+the proxy connects or refuses the socket and the agent holds **nothing** — `EgressProxyBinding`
+routes to the proxy over a CONNECT tunnel (mirroring Tier-1's `RemoteSupabaseBinding` transport),
+fails closed when the proxy is down, and mints no capability (`token_minted=false` for egress).
+
+**Advisory, not structural.** The proxy genuinely refuses off-allowlist hosts (the BLOCK is real),
+but a direct connection can bypass it until a netns forces the proxy as the sole route (structural,
+Thread C / `CAP_NET_ADMIN` — out of scope). The egress effect is labeled `advisory`;
+`tests/test_broker_egress.py` #8 records the bypass. Acceptance:
+`tests/test_refund_egress_combined.py` (8 tests). See INTERFACE_MAP.md "Egress rail".
+
 ## Files
 
 ```
-INTERFACE_MAP.md       the §2 discovery deliverable (cited interfaces + the divergence + Tier-1)
+INTERFACE_MAP.md       the §2 discovery deliverable (cited interfaces + the divergence + Tier-1 + egress)
+session.py             additive session emitter -> viewer/session.json (+ --combined two-rail session)
+viewer/                self-contained offline Session Viewer (index.html + README + session*.json)
+egress.py              the SECOND rail: EgressProxyBinding (effect-performing) + combined two-rail graph
 effects.py             ProposedEffect builders + resolvers (deterministic/adversarial/llm)
 agent.py               the LangGraph StateGraph + the Door (Tier 0 in-proc / Tier 1 over socket)
 trace.py               the one-panel-per-run renderer (§5) + the honest tier label
