@@ -42,6 +42,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 HERE = Path(__file__).resolve().parent          # examples/browser_demo (served as the static root)
 
+from . import inpage_panel
 from .guarded_tools import build_tools
 from .operator import read_operator_request
 from .scopes import select_scope
@@ -128,6 +129,20 @@ async def _run() -> int:
 
     auto_grant = bool(os.environ.get("SIGNET_AUTO_GRANT"))
     switched = {"done": False}
+    panel = {"obj": None}                            # Spec 04 Part 2 in-page panel (flag-gated)
+
+    async def push_panel(a: "Agent") -> None:
+        """Best-effort: attach the in-page panel once, then push current state. Never raises —
+        a panel failure must not change or abort a step (Acceptance 2: identical run on/off)."""
+        if not inpage_panel.enabled():
+            return
+        try:
+            if panel["obj"] is None:
+                panel["obj"] = await inpage_panel.maybe_attach(a.browser_session)
+            if panel["obj"] is not None:
+                await panel["obj"].push(inpage_panel.panel_state(session))
+        except Exception:
+            pass
 
     async def driver(a: "Agent") -> None:
         """on_step_start: state snapshot + the ONE-TIME scope switch (operator-driven by default).
@@ -143,6 +158,8 @@ async def _run() -> int:
             print(f"[step {step}] at {url}  (active scope: {mandate.active})")
         except Exception:
             pass
+
+        await push_panel(a)                          # install (once) + refresh the in-page panel
 
         if mandate.active != "tour" or switched["done"]:
             return
@@ -176,7 +193,7 @@ async def _run() -> int:
         task=TASK, llm=llm, fallback_llm=fallback, tools=tools,
         browser_profile=BrowserProfile(headless=False, allowed_domains=BROWSER_ALLOWED_DOMAINS),
         directly_open_url=False,   # Agent kwarg; first hop must go through the guarded navigate
-    ), driver)
+    ), driver, push_panel)
 
     print("\n[signet] decisions (each backed by a signed receipt):")
     for e in session.to_dict()["effects"]:
@@ -188,8 +205,8 @@ async def _run() -> int:
     return 0
 
 
-async def agent_run(agent: "Agent", driver) -> None:
-    await agent.run(on_step_start=driver, max_steps=18)
+async def agent_run(agent: "Agent", driver, on_step_end=None) -> None:
+    await agent.run(on_step_start=driver, on_step_end=on_step_end, max_steps=18)
 
 
 def main() -> int:
