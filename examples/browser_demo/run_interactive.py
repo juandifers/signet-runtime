@@ -17,11 +17,18 @@ UNCHANGED `select_scope`. The operator cannot exceed the ceiling: `select_scope`
 text to a frozen menu key and the validated setter clamps it ⊆ ceiling. The gate reads
 `mandate.active` fresh, so the agent's next-step retry of the same click now passes — no restart.
 
-Spec 04 flags (all additive, OFF by default — the Spec 01-03 flow is unchanged with them off):
-  SIGNET_AUTO_GRANT=1   restore the old hands-free arc (hook fires select_scope, no human).
-  SIGNET_INPAGE_PANEL=1 also paint the policy as an inert overlay ON the agent's page (Part 2).
-  SIGNET_VOICE=1        push-to-talk voice intake for the operator request, typed fallback (Part 3).
-  SIGNET_NO_SIDEBAR=1   skip the separate-page Spec 03 sidebar.
+Spec 05 — LIVE steering (default ON): an always-on operator channel (talk/type) changes the
+ACTIVE scope at ANY step, not only on a block, routed through select_scope and clamped to the
+ceiling. An unmappable / out-of-ceiling request is REFUSED + receipted and shown as a loud row
+in both panels (the refuse-the-operator beat). The channel is the SOLE stdin owner; the on-block
+path degrades to a printed notice (one reader, never two).
+
+Flags (all additive, OFF by default unless noted — the Spec 01-04 flows are unchanged):
+  SIGNET_LIVE_STEER=0   DISABLE always-on steering -> the Spec 04 on-block prompt (default is ON).
+  SIGNET_AUTO_GRANT=1   hands-free arc (hook fires select_scope, no human, no stdin reader).
+  SIGNET_INPAGE_PANEL=1 also paint the policy as an inert overlay ON the agent's page.
+  SIGNET_VOICE=1        push-to-talk voice intake for the operator request, typed fallback.
+  SIGNET_NO_SIDEBAR=1   skip the separate-page sidebar.
 
 LLM: full OpenAI models (primary + fallback), reading OPENAI_API_KEY from the repo-root .env.
 """
@@ -50,6 +57,7 @@ from .guarded_tools import build_tools
 from .operator import acquire_operator_request
 from .scopes import select_scope
 from .session import Session
+from .steering import LiveSteerChannel
 from .web_mandate import WebMandate
 
 # ---- hardcoded demo config (swap freely) --------------------------------------------------
@@ -130,13 +138,22 @@ async def _run() -> int:
     if sidebar_url:
         print(f"[signet] live sidebar: {sidebar_url}   (opening in your browser; SIGNET_NO_SIDEBAR=1 to skip)")
 
+    # Mode selection — exactly ONE owner of stdin in every mode (Spec 05 reconciliation):
+    #   AUTO_GRANT : hands-free, no human, no stdin reader.
+    #   LIVE_STEER : always-on steering channel (default) — the channel is the sole stdin owner;
+    #                the on-block path degrades to a printed notice, never a second reader.
+    #   else       : Spec 04 on-block prompt — the driver is the sole stdin owner, only on a block.
     auto_grant = bool(os.environ.get("SIGNET_AUTO_GRANT"))
+    live_steer = (not auto_grant) and (os.environ.get("SIGNET_LIVE_STEER", "1") != "0")
     switched = {"done": False}
+    notified = {"done": False}
     panel = {"obj": None}                            # Spec 04 Part 2 in-page panel (flag-gated)
+    agent_ref = {"a": None}                           # captured for off-step panel refreshes
 
     async def push_panel(a: "Agent") -> None:
         """Best-effort: attach the in-page panel once, then push current state. Never raises —
         a panel failure must not change or abort a step (Acceptance 2: identical run on/off)."""
+        agent_ref["a"] = a
         if not inpage_panel.enabled():
             return
         try:
@@ -147,12 +164,18 @@ async def _run() -> int:
         except Exception:
             pass
 
-    async def driver(a: "Agent") -> None:
-        """on_step_start: state snapshot + the ONE-TIME scope switch (operator-driven by default).
+    async def on_steer(decision, request: str) -> None:
+        """Runs on the loop after each always-on steer: log + refresh the in-page panel NOW so
+        a steer / refusal is visible immediately (the sidebar already updates from session.json)."""
+        verdict = decision.outcome.upper()
+        tag = "REFUSED (outside ceiling)" if not decision.allowed else f"active -> {mandate.active!r}"
+        print(f"\n[steer] {request!r} -> {verdict}  {tag}")
+        if agent_ref["a"] is not None:
+            await push_panel(agent_ref["a"])
 
-        No enforcement happens here — the gate inside the guarded tools is authoritative. This
-        hook only snapshots state and, on the first recorded BLOCK click under `tour`, opens the
-        operator channel (or auto-fires under SIGNET_AUTO_GRANT=1)."""
+    async def driver(a: "Agent") -> None:
+        """on_step_start: state snapshot + (non-live modes) the one-time on-block scope switch.
+        No enforcement here — the gate inside the guarded tools is authoritative."""
         try:
             step = getattr(getattr(a, "state", None), "n_steps", None)
             url = await a.browser_session.get_current_page_url()
@@ -164,11 +187,18 @@ async def _run() -> int:
 
         await push_panel(a)                          # install (once) + refresh the in-page panel
 
-        if mandate.active != "tour" or switched["done"]:
-            return
         blocked = next((e for e in session.to_dict()["effects"]
                         if e["proposed"]["action"] == "click" and e["decision"] == "BLOCK"), None)
-        if blocked is None:
+
+        if live_steer:
+            # Always-on channel owns the operator. Just announce the wall once; do NOT read stdin.
+            if blocked is not None and not notified["done"]:
+                notified["done"] = True
+                print(f"\n[steer] agent blocked on click -> {blocked['proposed']['target']}; "
+                      f"steer when ready (talk/type in this terminal).")
+            return
+
+        if mandate.active != "tour" or switched["done"] or blocked is None:
             return
         switched["done"] = True                      # open the channel exactly once
 
@@ -177,8 +207,8 @@ async def _run() -> int:
             print(f"[signet] AUTO-GRANT select_scope -> {d.outcome.upper()}  active is now {mandate.active!r}")
             return
 
-        # OPERATOR-DRIVEN (default): halt between steps and let a human decide. Blocking on stdin
-        # inside this awaited hook IS the pause — no step proceeds until the operator answers.
+        # Spec 04 on-block prompt (SIGNET_LIVE_STEER=0): halt between steps; the awaited hook IS
+        # the pause — no step proceeds until the operator answers. The driver is the sole reader.
         target = blocked["proposed"]["target"]
         print(f"\n>>> [operator] agent was blocked on click -> {target}")
         request = await acquire_operator_request(
@@ -192,11 +222,23 @@ async def _run() -> int:
         print(f"[signet] operator request {request!r} -> select_scope {d.outcome.upper()}  "
               f"active is now {mandate.active!r}")
 
-    await agent_run(Agent(
-        task=TASK, llm=llm, fallback_llm=fallback, tools=tools,
-        browser_profile=BrowserProfile(headless=False, allowed_domains=BROWSER_ALLOWED_DOMAINS),
-        directly_open_url=False,   # Agent kwarg; first hop must go through the guarded navigate
-    ), driver, push_panel)
+    live = None
+    if live_steer:
+        live = LiveSteerChannel(mandate, session, asyncio.get_running_loop(), on_apply=on_steer)
+        live.start()
+        print("[steer] LIVE steering ON — talk/type a scope request at ANY step to change the "
+              "active lane. Unmappable/out-of-ceiling requests are REFUSED + receipted. "
+              "(SIGNET_LIVE_STEER=0 for the Spec 04 on-block prompt.)")
+
+    try:
+        await agent_run(Agent(
+            task=TASK, llm=llm, fallback_llm=fallback, tools=tools,
+            browser_profile=BrowserProfile(headless=False, allowed_domains=BROWSER_ALLOWED_DOMAINS),
+            directly_open_url=False,   # Agent kwarg; first hop must go through the guarded navigate
+        ), driver, push_panel)
+    finally:
+        if live is not None:
+            live.stop()                  # daemon thread; process exits cleanly regardless
 
     print("\n[signet] decisions (each backed by a signed receipt):")
     for e in session.to_dict()["effects"]:

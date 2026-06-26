@@ -85,6 +85,8 @@
   .fx.allow::before { background: var(--allow); }
   .fx.block::before { background: var(--block); }
   .fx.switch::before { background: var(--switch); }
+  .fx.refused::before { background: var(--escalate); }
+  .fx.refused { border-color: var(--escalate); background: rgba(210,153,34,.10); }
   .fx .top { display: flex; align-items: center; gap: 11px; }
   .seq { color: var(--faint); font-weight: 800; font-size: 13px; min-width: 24px; }
   .sbadge { font-size: 11px; font-weight: 800; letter-spacing: .3px; padding: 3px 8px; border-radius: 999px;
@@ -96,12 +98,14 @@
   .verdict.allow { background: var(--allow-bg); color: var(--allow-ink); border: 1px solid var(--allow); }
   .verdict.block { background: var(--block-bg); color: var(--block-ink); border: 1px solid var(--block); }
   .verdict.switch { background: var(--switch-bg); color: var(--switch-ink); border: 1px solid var(--switch); }
+  .verdict.refused { background: var(--escalate-bg); color: var(--escalate-ink); border: 1px solid var(--escalate); }
   .reason { margin-top: 9px; font-size: 12.5px; color: var(--ink); line-height: 1.5; }
   .reason .lbl { color: var(--muted); }
   .rcpt { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 7px; align-items: center; }
   .rcpt .ok { color: var(--allow-ink); font-weight: 800; }
   .rcpt .bad { color: var(--block-ink); font-weight: 800; }
   .switchline { margin-top: 8px; font-size: 12px; color: var(--switch-ink); font-weight: 700; }
+  .refusedline { margin-top: 8px; font-size: 13px; color: var(--escalate-ink); font-weight: 800; word-break: break-word; }
 
   @keyframes flash { from { background: rgba(47,129,247,.22); } to { background: var(--panel); } }
   .fx.fresh { animation: flash 1.1s ease-out; }
@@ -194,7 +198,9 @@
       if (seen[e.seq]) return;            // already rendered; rows are append-only by seq
       seen[e.seq] = true;
       var isSwitch = (e.rail === "scope") || (e.proposed && e.proposed.action === "select_scope");
-      var vc = isSwitch ? "switch" : vClass(e.decision);
+      // A scope-rail non-ALLOW is the refuse-the-operator beat (Spec 05): loud + distinct.
+      var isRefusal = isSwitch && String(e.decision || "").toUpperCase() !== "ALLOW";
+      var vc = isRefusal ? "refused" : isSwitch ? "switch" : vClass(e.decision);
       var card = el("div", "fx " + vc + " fresh");
 
       var top = el("div", "top");
@@ -205,14 +211,18 @@
       at.appendChild(el("div", "act", pr.action || ""));
       at.appendChild(el("div", "tgt", pr.target || ""));
       top.appendChild(at);
-      top.appendChild(el("div", "verdict " + vc, isSwitch ? "SCOPE" : String(e.decision || "").toUpperCase()));
+      top.appendChild(el("div", "verdict " + vc,
+        isRefusal ? "REFUSED" : isSwitch ? "SCOPE" : String(e.decision || "").toUpperCase()));
       card.appendChild(top);
 
-      if (isSwitch) {
+      if (isRefusal) {
+        var rq = String((pr.detail || "").replace("query=", "") || pr.target || "");
+        var rf = el("div", "refusedline");
+        rf.textContent = "⛔ OPERATOR REQUEST REFUSED — outside ceiling: " + rq;
+        card.appendChild(rf);
+      } else if (isSwitch) {
         var sw = el("div", "switchline");
-        sw.textContent = (String(e.decision).toUpperCase() === "ALLOW")
-          ? ("operator steered → active scope changed to “" + (e.active_scope || "?") + "”")
-          : "operator request mapped to no scope → active scope unchanged";
+        sw.textContent = "operator steered → active scope changed to “" + (e.active_scope || "?") + "”";
         card.appendChild(sw);
       }
       if (e.reason) {

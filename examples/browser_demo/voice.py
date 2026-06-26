@@ -30,9 +30,14 @@ def voice_enabled() -> bool:
     return bool(os.environ.get("SIGNET_VOICE"))
 
 
-async def capture_voice_request() -> Optional[str]:
-    """Push-to-talk capture + transcribe. Returns the transcript, or None on ANY failure
-    (caller falls back to typing). Never raises."""
+def capture_voice_request_sync() -> Optional[str]:
+    """Synchronous push-to-talk capture + transcribe. Returns the transcript, or None on ANY
+    failure (caller falls back to typing). Never raises.
+
+    This is the core. It blocks the CALLING thread on the mic + stdin — which is exactly right
+    for the Spec 05 always-on steering channel (its own daemon thread) and is wrapped for the
+    Spec 04 async path by `capture_voice_request` below (run in an executor so the event loop
+    stays live). Keeping one implementation means both front-ends behave identically."""
     try:
         import sounddevice as sd          # noqa: F401  (heavy import; only when voice is on)
         import numpy as np
@@ -40,11 +45,10 @@ async def capture_voice_request() -> Optional[str]:
         print(f"[voice] mic/audio libs unavailable ({e}); falling back to typing.")
         return None
 
-    loop = asyncio.get_event_loop()
     print(">>> [operator/voice] press ENTER to START recording (or just type instead): ",
           end="", flush=True)
     # A non-empty first line means the operator chose to type — bail to the typed path.
-    first = await loop.run_in_executor(None, sys.stdin.readline)
+    first = sys.stdin.readline()
     if first.strip():
         print(f"[voice] typed input detected; using it: {first.strip()!r}")
         return first.strip()
@@ -62,7 +66,7 @@ async def capture_voice_request() -> Optional[str]:
         return None
 
     print("    🎙️  recording… press ENTER to STOP.", flush=True)
-    await loop.run_in_executor(None, sys.stdin.readline)
+    sys.stdin.readline()
     try:
         stream.stop(); stream.close()
     except Exception:
@@ -92,6 +96,13 @@ async def capture_voice_request() -> Optional[str]:
                 os.unlink(path)
             except Exception:
                 pass
+
+
+async def capture_voice_request() -> Optional[str]:
+    """Async wrapper (Spec 04 path): run the sync capture in an executor so the event loop —
+    and the agent running on it — stays alive while we wait on the mic/operator."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, capture_voice_request_sync)
 
 
 def _transcribe(path: str) -> Optional[str]:

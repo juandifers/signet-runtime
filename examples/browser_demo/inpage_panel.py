@@ -87,6 +87,14 @@ _INIT_SCRIPT = r"""
     });
     h += '<div style="color:#768390;margin:8px 0 2px">DECISIONS</div>';
     (s.decisions || []).forEach(function (d) {
+      if (d.decision === "REFUSED") {
+        // Loud, full-width amber beat — the operator asked and was DENIED + receipted.
+        h += '<div style="margin:3px 0;padding:4px 6px;border-radius:6px;'
+          + 'background:rgba(227,179,65,0.16);border:1px solid #e3b341;color:#f0c674;'
+          + 'white-space:normal">⛔ <b>OPERATOR REQUEST REFUSED</b> — outside ceiling<br>'
+          + '<span style="color:#d8b974">' + esc(d.target) + "</span></div>";
+        return;
+      }
       var c = d.decision === "ALLOW" ? ["#56d364", "✓"]
             : d.decision === "BLOCK" ? ["#ff7b72", "✗"]
             : ["#a371f7", "⇄"];
@@ -120,11 +128,21 @@ def panel_state(session, max_decisions: int = 7) -> dict:
     m = d["mandate"]
     decisions = []
     for e in d["effects"][-max_decisions:]:
-        verdict = "SWITCH" if e["rail"] == "scope" else e["decision"]
+        if e["rail"] == "scope":
+            # A scope-rail ALLOW is a switch; a scope-rail BLOCK is an operator REFUSAL — the
+            # refuse-the-operator beat (Spec 05). Show the *request* on a refusal, not "none".
+            if e["decision"] == "ALLOW":
+                verdict, target = "SWITCH", "→ " + str(e["proposed"]["target"])
+            else:
+                verdict = "REFUSED"
+                target = str(e["proposed"].get("detail") or "").replace("query=", "") \
+                    or str(e["proposed"]["target"])
+        else:
+            verdict, target = e["decision"], str(e["proposed"]["target"])
         decisions.append({
             "decision": verdict,
             "action": e["proposed"]["action"],
-            "target": str(e["proposed"]["target"]),
+            "target": target,
             "scope": e.get("active_scope") or m["active"],
         })
     return {

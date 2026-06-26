@@ -39,6 +39,29 @@ async def acquire_operator_request(prompt: str) -> str:
     return await read_operator_request(prompt)
 
 
+def acquire_operator_request_sync(prompt: str) -> str:
+    """Synchronous twin of `acquire_operator_request` for the Spec 05 always-on steering thread
+    (which owns its own thread, so it blocks synchronously rather than awaiting the loop). Same
+    contract: voice first when SIGNET_VOICE=1, else/on-failure the typed prompt."""
+    if voice.voice_enabled():
+        transcript = voice.capture_voice_request_sync()
+        if transcript:
+            print(f"[voice] transcript -> {transcript!r}")
+            return transcript
+    return read_operator_request_sync(prompt)
+
+
+def read_operator_request_sync(prompt: str) -> str:
+    """Print `prompt`, read ONE line from stdin (blocking THIS thread), return it stripped.
+    EOF/closed stdin -> "" so a steering loop sees 'nothing' rather than spinning on an error."""
+    print(prompt, end="", flush=True)
+    try:
+        line = sys.stdin.readline()
+    except Exception:
+        return ""
+    return (line or "").strip()
+
+
 async def read_operator_request(prompt: str) -> str:
     """Print `prompt`, read ONE line from stdin off the event loop, return it stripped.
 
