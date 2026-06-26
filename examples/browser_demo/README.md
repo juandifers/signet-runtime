@@ -141,6 +141,46 @@ receipt hash chain.
 > outcome, chain, `active_scope`); generalizing the field names beyond payments is deferred —
 > not refactored here.
 
+## Spec 04 — Operator control, in-page panel, voice
+
+Three **additive, flag-gated** layers on top of the Spec 02/03 demo. Each is OFF by default
+and `run_interactive.py` behaves exactly as before with every flag unset; if any layer
+destabilizes the agent it simply stays off.
+
+**Part 1 — operator-driven scope control (default ON).** Spec 02 fired the scope switch from a
+hook (hands-free). Now a **real human** drives it: when the agent is BLOCKED on the YC click,
+the run **halts between steps** and prompts on stdin; the typed request is fed to the unchanged
+`select_scope`. Blocking inside the `await`ed `on_step_start` hook *is* the pause (browser-use
+checks `state.paused` before the hook, so `agent.pause()` from a hook lands one step late — the
+awaited hook is the exact, race-free barrier). The operator cannot exceed the ceiling: the
+request still goes planner → frozen menu key → validated setter. `SIGNET_AUTO_GRANT=1` restores
+the hands-free arc. *Proof:* `python -m examples.browser_demo.selfcheck_operator`.
+
+**Part 2 — in-page policy panel (`SIGNET_INPAGE_PANEL=1`).** Paints the policy (ceiling, scope
+lanes, decision feed) as a fixed overlay **on the agent's own page**, alongside its actions.
+The Spec 03 separate-page sidebar stays as the default/fallback. The overlay is **inert**:
+non-interactive elements only, `position:fixed`, `pointer-events:none`, `aria-hidden`,
+`role="presentation"`; injected via CDP `addScriptToEvaluateOnNewDocument` (survives
+navigation), state pushed each step via `Runtime.evaluate` (no cross-origin fetch). *Acceptance
+gate* (`selfcheck_inpage.py`, real Chromium on a localhost fixture): interactive selector-map
+indices are **byte-identical** with the panel on/off, the overlay never enters the selector
+map, and it paints. Kept opt-in per spec.
+
+**Part 3 — push-to-talk voice (`SIGNET_VOICE=1`).** A second front-end to the *same*
+`select_scope` intake: ENTER to record, speak, ENTER to stop; mic → temp wav (`sounddevice`) →
+ElevenLabs `speech_to_text` `scribe_v2` → transcript → `select_scope`. Needs `ELEVENLABS_API_KEY`
+and the `elevenlabs` + `sounddevice` packages. **Total graceful degradation**: any failure
+(missing libs/key, mic error, empty audio, STT/network error) prints one line and falls back to
+the typed Part-1 prompt — the run never crashes or hangs. TTS speak-back was left out (optional).
+*Proof:* `python -m examples.browser_demo.selfcheck_voice`.
+
+```bash
+python -m examples.browser_demo.run_interactive                      # Part 1 (operator-driven) + Spec 03 sidebar
+SIGNET_INPAGE_PANEL=1 python -m examples.browser_demo.run_interactive # + in-page overlay (Part 2)
+SIGNET_VOICE=1 python -m examples.browser_demo.run_interactive        # + push-to-talk (Part 3)
+SIGNET_AUTO_GRANT=1 python -m examples.browser_demo.run_interactive   # legacy hands-free arc
+```
+
 ## Files
 
 | file | role |
@@ -151,14 +191,21 @@ receipt hash chain.
 | `scopes.py` | `select_scope` — contained planner (LLM + keyword fallback) → deterministic activation |
 | `session.py` | wraps the real `signet.ReceiptLog`; one receipt per decision + `scope_switch`; writes `session.json` |
 | `run.py` | Spec 01 entrypoint (single-scope spine) |
-| `run_interactive.py` | Spec 02 entrypoint (two-tier + live scope switch) |
+| `run_interactive.py` | Spec 02/03/04 entrypoint (two-tier + operator-driven switch + flag-gated panel/voice) |
+| `operator.py` | Spec 04 Part 1 — operator stdin intake + unified voice-or-typed `acquire_operator_request` |
+| `inpage_panel.py` | Spec 04 Part 2 — inert in-page overlay over CDP (survives navigation) |
+| `voice.py` | Spec 04 Part 3 — push-to-talk capture + ElevenLabs `scribe_v2`, typed fallback |
 | `selfcheck.py` / `selfcheck_scopes.py` | offline gate/receipt verification (acceptance, no LLM/browser) |
+| `selfcheck_operator.py` / `selfcheck_voice.py` | offline proof of Spec 04 Parts 1 & 3 (no LLM/browser) |
+| `selfcheck_inpage.py` | Spec 04 Part 2 acceptance gate — index-stability measurement (real Chromium, localhost) |
 
-## Deferred to later specs (do not build here)
+## Built in later specs / still deferred
 
-- **Live sidebar** — streaming the decisions to a live UI during the run.
-- **Voice.**
-- **Structural enforcement** — the out-of-process sole-path performer that upgrades the
-  `advisory` label to a real boundary (the netns analogue for the browser).
-- **Receipt-schema generalization** — browser-native field names instead of the
-  AP2-payment-shaped `ReceiptLog`/`Receipt` (see the deferred-item note above).
+- **Live sidebar** — built in Spec 03 (separate-page) and Spec 04 Part 2 (in-page overlay).
+- **Voice** — built in Spec 04 Part 3 (push-to-talk via ElevenLabs `scribe_v2`).
+- **Structural enforcement** *(still deferred)* — the out-of-process sole-path performer that
+  upgrades the `advisory` label to a real boundary (the netns analogue for the browser). Every
+  Spec 01–04 decision remains `tier: "0 (advisory)"`.
+- **Receipt-schema generalization** *(still deferred)* — browser-native field names instead of
+  the AP2-payment-shaped `ReceiptLog`/`Receipt` (see the deferred-item note above).
+- **TTS speak-back** *(optional, not built)* — spoken confirmation of the granted scope.
