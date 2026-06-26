@@ -17,8 +17,11 @@ UNCHANGED `select_scope`. The operator cannot exceed the ceiling: `select_scope`
 text to a frozen menu key and the validated setter clamps it ⊆ ceiling. The gate reads
 `mandate.active` fresh, so the agent's next-step retry of the same click now passes — no restart.
 
-  SIGNET_AUTO_GRANT=1 restores the old hands-free arc (the hook fires select_scope itself, no
-  human) so the unattended demo still runs unchanged.
+Spec 04 flags (all additive, OFF by default — the Spec 01-03 flow is unchanged with them off):
+  SIGNET_AUTO_GRANT=1   restore the old hands-free arc (hook fires select_scope, no human).
+  SIGNET_INPAGE_PANEL=1 also paint the policy as an inert overlay ON the agent's page (Part 2).
+  SIGNET_VOICE=1        push-to-talk voice intake for the operator request, typed fallback (Part 3).
+  SIGNET_NO_SIDEBAR=1   skip the separate-page Spec 03 sidebar.
 
 LLM: full OpenAI models (primary + fallback), reading OPENAI_API_KEY from the repo-root .env.
 """
@@ -44,7 +47,7 @@ HERE = Path(__file__).resolve().parent          # examples/browser_demo (served 
 
 from . import inpage_panel
 from .guarded_tools import build_tools
-from .operator import read_operator_request
+from .operator import acquire_operator_request
 from .scopes import select_scope
 from .session import Session
 from .web_mandate import WebMandate
@@ -177,9 +180,9 @@ async def _run() -> int:
         # OPERATOR-DRIVEN (default): halt between steps and let a human decide. Blocking on stdin
         # inside this awaited hook IS the pause — no step proceeds until the operator answers.
         target = blocked["proposed"]["target"]
-        request = await read_operator_request(
-            f"\n>>> [operator] agent was blocked on click -> {target}\n"
-            f">>> [operator] type a scope request (or ENTER to deny): ")
+        print(f"\n>>> [operator] agent was blocked on click -> {target}")
+        request = await acquire_operator_request(
+            ">>> [operator] type a scope request (or ENTER to deny): ")
         if not request:
             print("[signet] operator denied — no scope granted; agent remains blocked.")
             session.record_scope_switch("(operator declined)", None, "block",

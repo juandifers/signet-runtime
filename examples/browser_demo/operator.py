@@ -23,6 +23,21 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from . import voice
+
+
+async def acquire_operator_request(prompt: str) -> str:
+    """The ONE intake the driver calls. Tries voice first when SIGNET_VOICE=1 (Spec 04 Part 3);
+    on any voice failure (or when the flag is off) falls back to the typed prompt. Both paths
+    land on the same `select_scope` — voice is a front-end, never a separate authority path."""
+    if voice.voice_enabled():
+        transcript = await voice.capture_voice_request()
+        if transcript:
+            print(f"[voice] transcript -> {transcript!r}")
+            return transcript
+        # voice unavailable / failed / empty -> typed fallback (Acceptance 3)
+    return await read_operator_request(prompt)
+
 
 async def read_operator_request(prompt: str) -> str:
     """Print `prompt`, read ONE line from stdin off the event loop, return it stripped.
