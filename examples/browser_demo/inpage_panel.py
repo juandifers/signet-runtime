@@ -76,6 +76,7 @@ _INIT_SCRIPT = r"""
     h += "<div style='margin-bottom:6px'>"
       + (s.ceiling && s.ceiling.domains || []).map(function (d) { return chip("🔒 " + d, "#1c2330", "#9da7b3"); }).join("")
       + (s.ceiling && s.ceiling.actions || []).map(function (a) { return chip(a, "#10202e", "#56a3f7"); }).join("")
+      + (s.ceiling && s.ceiling.paths || []).map(function (p) { return chip(p, "#23202e", "#b39ddb"); }).join("")
       + "</div>";
     h += '<div style="color:#768390;margin-bottom:2px">SCOPES</div>';
     (s.scopes || []).forEach(function (sc) {
@@ -83,7 +84,8 @@ _INIT_SCRIPT = r"""
       h += '<div style="margin:2px 0;padding:3px 6px;border-radius:6px;border:1px solid '
         + (on ? "#2ea043" : "#21262d") + ";background:" + (on ? "rgba(46,160,67,0.12)" : "transparent") + '">'
         + '<span style="color:' + (on ? "#56d364" : "#768390") + '">' + (on ? "● " : "○ ") + esc(sc.name) + "</span>"
-        + '<span style="color:#586069;font-size:11px"> · ' + esc((sc.domains || []).join(", ")) + "</span></div>";
+        + '<span style="color:#586069;font-size:11px"> · ' + esc((sc.domains || []).join(", ")) + "</span>"
+        + '<span style="color:#8a7fb8;font-size:11px"> · ' + esc((sc.paths || []).join(" ")) + "</span></div>";
     });
     h += '<div style="color:#768390;margin:8px 0 2px">DECISIONS</div>';
     (s.decisions || []).forEach(function (d) {

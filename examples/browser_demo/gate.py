@@ -30,6 +30,7 @@ decision with no agent restart.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from urllib.parse import urlparse
 
 from .web_mandate import ACTION_TYPES
@@ -64,9 +65,48 @@ def _domain_allowed(domain: str, allowed: frozenset[str]) -> bool:
     return any(domain == a or domain.endswith("." + a) for a in allowed)
 
 
+def resolve_path(target: str) -> str | None:
+    """The URL PATH from a URL or bare host, query/fragment dropped, '' normalized to '/'.
+    `https://x.com/inventory-item.html?id=4` -> `/inventory-item.html`; `x.com` -> `/`.
+    Returns None only if `target` is not a usable string (Spec 06)."""
+    if not isinstance(target, str) or not target.strip():
+        return None
+    t = target.strip()
+    if "://" not in t:
+        t = "https://" + t          # bare host or host/path
+    return urlparse(t).path or "/"  # urlparse already strips ?query and #fragment
+
+
+def _path_allowed(path: str, allow: frozenset[str]) -> bool:
+    """True if `path` matches any glob in `allow`. fnmatchcase (NOT fnmatch) so matching is
+    case-sensitive and OS-independent — URL paths are case-sensitive and the result must be
+    identical on every platform."""
+    return any(fnmatchcase(path, g) for g in allow)
+
+
 def _active_scope(scope):
     """Accept a Scope or a FrozenWebMandate; resolve the latter to its active scope FRESH."""
     return scope.active_scope if hasattr(scope, "active_scope") else scope
+
+
+def _ceiling_scope(scope):
+    """The frozen ceiling when a FrozenWebMandate is passed, else None (a bare Scope has no
+    ceiling — then only that scope's own path_allow applies)."""
+    return scope.ceiling if hasattr(scope, "ceiling") else None
+
+
+def _path_check(path: str | None, ceiling, scope) -> "Decision | None":
+    """The Spec 06 dual-check: a path must satisfy the ceiling's path_allow AND the active
+    scope's. Returns a BLOCK Decision on a miss (None = path is allowed). Ceiling-deny is checked
+    FIRST and surfaced distinctly, because it is the "no scope — and no operator — can grant this"
+    case; scope-deny is the "switch to another lane could grant it" case."""
+    if path is None:
+        return Decision("block", "could not resolve a URL path from the target (default-deny)")
+    if ceiling is not None and not _path_allowed(path, ceiling.path_allow):
+        return Decision("block", f"path {path} not allowed in ceiling")
+    if not _path_allowed(path, scope.path_allow):
+        return Decision("block", f"path {path} not in scope {scope.name!r}")
+    return None
 
 
 def decide(scope, action_type: str, target: str, *, provenance: str = "agent",
@@ -75,6 +115,7 @@ def decide(scope, action_type: str, target: str, *, provenance: str = "agent",
     click/type/extract it is the CURRENT page URL. `click_destination` (a click's resolved
     href, absolute) drives the click decision when present."""
     s = _active_scope(scope)
+    ceiling = _ceiling_scope(scope)
 
     if action_type not in ACTION_TYPES:
         return Decision("block", f"unrecognized action type {action_type!r} (default-deny)")
@@ -85,7 +126,7 @@ def decide(scope, action_type: str, target: str, *, provenance: str = "agent",
             f"action {action_type!r} not in scope {s.name!r} actions {sorted(s.allowed_actions)}")
 
     if action_type == "click":
-        return _decide_click(s, target, click_destination)
+        return _decide_click(s, ceiling, target, click_destination)
 
     domain = resolve_domain(target)
     if domain is None:
@@ -94,16 +135,32 @@ def decide(scope, action_type: str, target: str, *, provenance: str = "agent",
         return Decision(
             "block",
             f"{action_type} to {domain} not in scope {s.name!r} domains {sorted(s.allowed_domains)}")
+    # Spec 06 dual-check (ceiling AND scope). For `navigate`, `target` is the DESTINATION; for
+    # `type`/`extract`, `target` is the CURRENT page — which must itself be in scope. Checking the
+    # current page is the backstop for client-side/JS navigations (e.g. a saucedemo button) that
+    # never pass through our `navigate` tool: you may land off-path, but you cannot ACT there. The
+    # default path_allow ("/*") matches every path, so prior `/*` demos are byte-identical.
+    denied = _path_check(resolve_path(target), ceiling, s)
+    if denied is not None:
+        return denied
     return Decision("allow", f"{action_type} on {domain} within scope {s.name!r}")
 
 
-def _decide_click(s, current: str, click_destination: str | None) -> Decision:
-    """Element-level click policy: decide on the click's navigable destination (Spec 02 Part A)."""
+def _decide_click(s, ceiling, current: str, click_destination: str | None) -> Decision:
+    """Element-level click policy: decide on the click's navigable destination (Spec 02 Part A),
+    then path-check (Spec 06 dual-check). Two path gates: the CURRENT page must be in scope (the
+    backstop — a JS click may have landed you off-path), and a RESOLVED destination must be too."""
+    denied = _path_check(resolve_path(current), ceiling, s)   # where you are now must be in scope
+    if denied is not None:
+        return denied
     if click_destination is not None:
         dest = resolve_domain(click_destination)
         if dest is None:
             return Decision("block", f"click destination {click_destination!r} is unresolvable")
         if _domain_allowed(dest, s.allowed_domains):
+            denied = _path_check(resolve_path(click_destination), ceiling, s)
+            if denied is not None:
+                return denied
             return Decision("allow", f"click -> {dest} within scope {s.name!r}")
         # page-provenance href: untrusted, may only deny, never widen the allowlist.
         return Decision(

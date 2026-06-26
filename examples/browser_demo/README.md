@@ -203,6 +203,25 @@ ceiling — a spoken/typed request can only ever select a pre-authorized lane.
 - *Proofs:* `selfcheck_steer.py` (real channel thread: mid-run flip, refusal+receipt, voice/typed
   routing) and `selfcheck_refusal_ui.py` (real Chromium: the refused row shows in both panels).
 
+**Part 1 polish — two-terminal steering (`SIGNET_STEER_IPC=1`, OFF by default).** In the single
+terminal the steering prompt and the agent's per-step logs share one stdout, so the prompt
+scrolls. With this flag the operator drives from a **separate terminal**: the run binds a local
+Unix socket and the operator runs `steer_console` in its own window — so the prompt never
+interleaves with the agent's output. **The channel is unchanged**: `SteerServer.request_source`
+satisfies the *same* sync contract the in-terminal source did (`""`/whitespace → no-op, a line →
+one request, `None` → stop), so it drops straight into the existing daemon-thread + loop-marshaling
+path. Only the bytes' origin moved (stdin → a local AF_UNIX socket, `0600`); it carries free-text
+requests, never authority — the same clamp-to-ceiling and refuse-the-operator beat apply. *Proof:*
+`selfcheck_steer_ipc.py` (real socket + real channel on a real loop: a line over the wire flips the
+scope, a whitespace line is a no-op, an out-of-ceiling line is REFUSED + receipted).
+
+```bash
+# terminal 1 — the agent
+SIGNET_STEER_IPC=1 python -m examples.browser_demo.run_interactive
+# terminal 2 — the operator console (add SIGNET_VOICE=1 to push-to-talk)
+SIGNET_STEER_IPC=1 python -m examples.browser_demo.steer_console
+```
+
 **Part 2 — task steering (`SIGNET_TASK_STEER=1`, OFF by default).** The operator redirects the
 agent's *goal* mid-run by prefixing a request with `task:` / `goal:` / `do:` — e.g.
 `task: go to the admin panel and delete the account`. This is **untrusted instruction**: the
@@ -233,28 +252,76 @@ SIGNET_LIVE_STEER=0       python -m examples.browser_demo.run_interactive   # re
 - The steering channel is a **focused control terminal** (press ENTER to talk / type a line) — it
   deliberately avoids a global OS hotkey, which on macOS can need **Accessibility** permission and
   fail silently on an unfamiliar machine on stage.
+- **Two-terminal steering** (`SIGNET_STEER_IPC=1`) uses a local `AF_UNIX` socket (macOS/Linux);
+  both processes default to `<tmpdir>/signet-steer.sock` (override with `SIGNET_STEER_SOCK`). The
+  in-terminal source remains the portable default. Launch order doesn't matter — the console
+  retries the connection briefly; Ctrl-C quits the console only, and it can reconnect.
+
+## Spec 06 — Path-level scoping (`run_saucedemo.py`)
+
+Single-domain apps (saucedemo.com) need policy about URL **paths**, not domains. A `Scope` and the
+ceiling each gain `path_allow: list[str]` — fnmatch globs over the URL path (`/inventory*`,
+`/cart.html`). Default `["/*"]` = all paths, so every Spec 01–05 mandate is **byte-identical**.
+
+- **Dual-check, not build-time subset.** At decision time a path must satisfy **the ceiling's
+  `path_allow` AND the active scope's**. Because the ceiling is always also checked, a scope can
+  never reach a path the ceiling forbids — no fragile glob-subset proof at build (domains/actions
+  keep their build validation). The reason distinguishes **ceiling-deny** (`path … not allowed in
+  ceiling` — *no scope, no operator, can grant it*) from **scope-deny** (`path … not in scope
+  'shopping'` — *switching lanes could grant it*). Both render in the sidebar and in-page panel
+  (a `paths` row on each lane + the frozen ceiling).
+- **Where it bites:** the navigate **destination** and a **resolved** click destination (the Spec
+  02 href path) — *plus* the **current page** on every action. The current-page check is the
+  backstop for client-side/JS navigations (saucedemo's add-to-cart/checkout/finish are JS
+  `<button>`s with no static href): you may *land* on an off-scope path via `allow_unresolved`, but
+  you cannot **act** there — type/extract/click are blocked until you're back on an allowed path.
+
+The `run_saucedemo` mandate: ceiling allows `/`, `/inventory*`, `/cart.html`, `/checkout-step-one`,
+`/checkout-step-two` — **omitting `/checkout-complete.html`**, so *placing* the order is outside the
+ceiling and no scope (or operator) can grant it. Scope `shopping` (default) = browse + cart; scope
+`checkout` adds the two checkout pages. The operator switches `shopping → checkout` live (Spec 05).
+
+```bash
+python -m examples.browser_demo.run_saucedemo          # path-scoped arc (operator steers shopping→checkout live)
+python -m examples.browser_demo.selfcheck_saucedemo    # offline proof + sample session.json (no browser/LLM)
+```
+
+> **Credentials:** saucedemo's `standard_user` / `secret_sauce` are **public, documented** test
+> credentials for a throwaway site. In production a **human establishes the authenticated session**
+> and the agent does **not** enter credentials — Signet gates the agent's *actions*, it is not a
+> credential manager.
+
+*Honesty (fought the library):* saucedemo performs real `*.html` navigations via JS buttons, so the
+click destination is rarely a static href — the **current-page** path check, not the click-
+destination check, is what actually contains checkout. `selfcheck_saucedemo.py` proves the whole
+arc offline (the live page-loads need network DNS this sandbox can't serve — eyeball on your Mac).
 
 ## Files
 
 | file | role |
 |------|------|
-| `web_mandate.py` | `WebMandate` builder → frozen **ceiling + scope menu**; only `active` mutates (Spec 02) |
-| `gate.py` | pure `decide(scope, action_type, target, *, provenance, click_destination=None)` (default-deny) |
+| `web_mandate.py` | `WebMandate` builder → frozen **ceiling + scope menu** (+ Spec 06 `path_allow`); only `active` mutates |
+| `gate.py` | pure `decide(...)` (default-deny); Spec 06 adds `resolve_path` + the ceiling-AND-scope path dual-check |
+| `run_saucedemo.py` | Spec 06 entrypoint — path-scoped single-domain arc, reusing `run_interactive`'s `RunConfig` |
 | `guarded_tools.py` | `build_tools` → pruned `Tools()` of four guarded actions; `resolve_click_destination` reads a node's href |
 | `scopes.py` | `select_scope` — contained planner (LLM + keyword fallback) → deterministic activation |
 | `session.py` | wraps the real `signet.ReceiptLog`; one receipt per decision + `scope_switch`; writes `session.json` |
 | `run.py` | Spec 01 entrypoint (single-scope spine) |
-| `run_interactive.py` | Spec 02/03/04 entrypoint (two-tier + operator-driven switch + flag-gated panel/voice) |
+| `run_interactive.py` | Spec 02–05 entrypoint (two-tier + operator switch + panel/voice/steering); `RunConfig` parameterizes it (Spec 06) |
 | `operator.py` | Spec 04 Part 1 — operator stdin intake (async + sync twins), unified voice-or-typed |
 | `inpage_panel.py` | Spec 04 Part 2 — inert in-page overlay over CDP (survives navigation); Spec 05 REFUSED row |
 | `voice.py` | Spec 04 Part 3 — push-to-talk capture (sync core + async wrapper), ElevenLabs `scribe_v2` |
 | `steering.py` | Spec 05 Part 1 — always-on live steering channel (daemon thread → loop marshaling) |
+| `steer_ipc.py` | Spec 05 polish — two-terminal transport: `SteerServer` (Unix socket → `request_source`) + console `send_loop` |
+| `steer_console.py` | Spec 05 polish — the separate operator terminal (`python -m …steer_console`) |
 | `task_steer.py` | Spec 05 Part 2 — task-redirect routing + guarded `Agent.add_new_task` injection |
 | `selfcheck.py` / `selfcheck_scopes.py` | offline gate/receipt verification (acceptance, no LLM/browser) |
 | `selfcheck_operator.py` / `selfcheck_voice.py` | offline proof of Spec 04 Parts 1 & 3 (no LLM/browser) |
 | `selfcheck_steer.py` / `selfcheck_task_steer.py` | offline proof of Spec 05 Parts 1 & 2 (real channel thread / gating invariant) |
+| `selfcheck_steer_ipc.py` | offline proof of the two-terminal transport (real socket + real channel: flip / no-op / refusal over the wire) |
 | `selfcheck_inpage.py` | Spec 04 Part 2 gate — index-stability measurement (real Chromium, localhost) |
 | `selfcheck_refusal_ui.py` | Spec 05 Part 1 — refused row shows in BOTH panels (real Chromium) |
+| `selfcheck_saucedemo.py` | Spec 06 — offline path dual-check proof (ceiling-deny vs scope-deny) + sample arc session.json |
 
 ## Built in later specs / still deferred
 

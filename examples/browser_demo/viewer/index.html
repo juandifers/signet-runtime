@@ -66,6 +66,7 @@
   .chip { display: inline-flex; align-items: center; gap: 7px; background: var(--panel2);
     border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; }
   .chip.dom { color: var(--ink); } .chip.act { color: var(--allow-ink); font-weight: 700; }
+  .chip.pth { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
   .lanes { display: flex; gap: 10px; flex-wrap: wrap; }
   .lane { flex: 1 1 0; min-width: 150px; background: var(--panel2); border: 1px solid var(--line);
@@ -160,6 +161,8 @@
     var row = el("div", "row");
     (c.domains || []).forEach(function (d) { row.appendChild(el("span", "chip dom", d)); });
     (c.actions || []).forEach(function (a) { row.appendChild(el("span", "chip act", a)); });
+    // Spec 06: the frozen path allow-list — what no scope (and no operator) can exceed.
+    (c.paths || []).forEach(function (p) { row.appendChild(el("span", "chip pth", p)); });
     box.appendChild(row);
   }
 
@@ -175,6 +178,7 @@
       var meta = el("div", "meta");
       meta.appendChild(mkkv("domains", (s.domains || []).join(", ")));
       meta.appendChild(mkkv("actions", (s.actions || []).join(", ")));
+      meta.appendChild(mkkv("paths", (s.paths || []).join(", ")));   // Spec 06 path scope
       meta.appendChild(mkkv("clicks", s.click_policy || "—"));
       lane.appendChild(meta);
       box.appendChild(lane);

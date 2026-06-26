@@ -68,12 +68,20 @@ def _domain_within(domain: str, allowed: frozenset[str]) -> bool:
 
 @dataclass(frozen=True)
 class Scope:
-    """One named subset of the ceiling. The gate decides against the ACTIVE scope."""
+    """One named subset of the ceiling. The gate decides against the ACTIVE scope.
+
+    `path_allow` (Spec 06): fnmatch-style globs over the URL PATH within an allowed domain
+    (e.g. `/inventory*`, `/cart.html`). The default `("/*",)` matches every path, so a mandate
+    that never sets paths behaves exactly as Spec 01-05 did. There is NO build-time glob-subset
+    proof against the ceiling: the gate checks the ceiling's `path_allow` AND the active scope's
+    on every decision, so a scope can never reach a path the ceiling forbids (the dual-check IS
+    the structural guarantee)."""
 
     name: str
     allowed_actions: frozenset[str]
     allowed_domains: frozenset[str]
     click_policy: str = "in_domain_only"
+    path_allow: frozenset[str] = frozenset({"/*"})
 
     def granted_scope(self) -> list[dict]:
         """Flat (rail, action, target) allow-list for the session viewer header."""
@@ -84,7 +92,8 @@ class Scope:
 
     def summary(self) -> dict:
         return {"name": self.name, "domains": sorted(self.allowed_domains),
-                "actions": sorted(self.allowed_actions), "click_policy": self.click_policy}
+                "actions": sorted(self.allowed_actions), "click_policy": self.click_policy,
+                "paths": sorted(self.path_allow)}
 
 
 class FrozenWebMandate:
@@ -178,19 +187,25 @@ class WebMandate:
 
     # -- Spec 02 tiered API ----------------------------------------------------------------
     def ceiling(self, *, domains: Iterable[str], actions: Iterable[str],
-                click_policy: str = "allow_unresolved") -> "WebMandate":
-        """Declare the maximum authority. Scopes are validated ⊆ this at build()."""
+                click_policy: str = "allow_unresolved",
+                path_allow: Iterable[str] = ("/*",)) -> "WebMandate":
+        """Declare the maximum authority. Scopes are validated ⊆ this at build() for domains and
+        actions; `path_allow` is NOT subset-validated here — the gate's dual-check (ceiling AND
+        scope) is the runtime guarantee (Spec 06)."""
         self._ceiling = Scope(
             name="__ceiling__",
             allowed_actions=frozenset(_check_action(a) for a in actions),
             allowed_domains=frozenset(_normalize_domain(d) for d in domains),
             click_policy=_check_click_policy(click_policy),
+            path_allow=frozenset(_check_path(p) for p in path_allow),
         )
         return self
 
     def scope(self, name: str, *, domains: Iterable[str], actions: Iterable[str],
-              click_policy: str = "in_domain_only") -> "WebMandate":
-        """Add a named scope (a declared subset of the ceiling — validated at build())."""
+              click_policy: str = "in_domain_only",
+              path_allow: Iterable[str] = ("/*",)) -> "WebMandate":
+        """Add a named scope (a declared subset of the ceiling — domains/actions validated at
+        build(); `path_allow` is enforced by the gate's dual-check, not validated here)."""
         if not name or name == "__ceiling__":
             raise ValueError(f"invalid scope name {name!r}")
         if name in self._scopes:
@@ -200,6 +215,7 @@ class WebMandate:
             allowed_actions=frozenset(_check_action(a) for a in actions),
             allowed_domains=frozenset(_normalize_domain(d) for d in domains),
             click_policy=_check_click_policy(click_policy),
+            path_allow=frozenset(_check_path(p) for p in path_allow),
         )
         return self
 
@@ -263,6 +279,17 @@ def _check_action(a: str) -> str:
     if a not in ACTION_TYPES:
         raise ValueError(f"unknown action type {a!r}; allowed: {sorted(ACTION_TYPES)}")
     return a
+
+
+def _check_path(p: str) -> str:
+    """A path-allow entry is an fnmatch glob over the URL path; it MUST be rooted at '/'. We do
+    not lower-case it (URL paths are case-sensitive) and we keep the glob verbatim."""
+    if not isinstance(p, str) or not p.strip():
+        raise ValueError(f"path_allow entry must be a non-empty string, got {p!r}")
+    s = p.strip()
+    if not s.startswith("/"):
+        raise ValueError(f"path_allow entry {p!r} must start with '/' (it globs the URL path)")
+    return s
 
 
 def _check_click_policy(p: str) -> str:

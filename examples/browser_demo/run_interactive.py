@@ -25,6 +25,8 @@ path degrades to a printed notice (one reader, never two).
 
 Flags (all additive, OFF by default unless noted — the Spec 01-04 flows are unchanged):
   SIGNET_LIVE_STEER=0   DISABLE always-on steering -> the Spec 04 on-block prompt (default is ON).
+  SIGNET_STEER_IPC=1    drive steering from a SEPARATE terminal (steer_console) over a local Unix
+                        socket, so the prompt never interleaves with the agent's step logs.
   SIGNET_AUTO_GRANT=1   hands-free arc (hook fires select_scope, no human, no stdin reader).
   SIGNET_INPAGE_PANEL=1 also paint the policy as an inert overlay ON the agent's page.
   SIGNET_VOICE=1        push-to-talk voice intake for the operator request, typed fallback.
@@ -42,7 +44,9 @@ import socketserver
 import sys
 import threading
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, List
 
 from dotenv import load_dotenv
 
@@ -52,7 +56,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 HERE = Path(__file__).resolve().parent          # examples/browser_demo (served as the static root)
 
-from . import inpage_panel, task_steer
+from . import inpage_panel, steer_ipc, task_steer
 from .guarded_tools import build_tools
 from .operator import acquire_operator_request
 from .scopes import select_scope
@@ -75,6 +79,26 @@ FALLBACK_MODEL = os.environ.get("SIGNET_DEMO_FALLBACK_MODEL", "gpt-5.4")
 # browser-use's own belt; our gate is the advisory enforcer of record. Note: NO google here.
 BROWSER_ALLOWED_DOMAINS = ["*.wikipedia.org", "https://*.wikipedia.org",
                            "*.ycombinator.com", "https://*.ycombinator.com"]
+
+
+@dataclass
+class RunConfig:
+    """Everything that differs between demos (Wikipedia vs Saucedemo, Spec 06). The whole run
+    loop — modes, panels, live steering, task steer — is target-agnostic and reads only this.
+    Defaults reproduce the Spec 02-05 Wikipedia run byte-for-byte."""
+    build_mandate: Callable[[], "WebMandate"]
+    task: str
+    allowed_domains: List[str]
+    start_url: str
+    session_id: str = "browser-scopes-demo"
+    model: str = MODEL
+    fallback_model: str = FALLBACK_MODEL
+    title: str = "two-tier WebMandate"
+
+
+def _wikipedia_config() -> "RunConfig":
+    return RunConfig(build_mandate=build_mandate, task=TASK,
+                     allowed_domains=BROWSER_ALLOWED_DOMAINS, start_url=START_URL)
 
 
 def build_mandate() -> "WebMandate":
@@ -117,22 +141,23 @@ def _start_sidebar() -> str | None:
     return url
 
 
-async def _run() -> int:
+async def _run(config: "RunConfig | None" = None) -> int:
+    config = config or _wikipedia_config()
     openai_key = os.environ.get("OPENAI_API_KEY")
     if not openai_key:
         print("ERROR: OPENAI_API_KEY is not set. Set it in .env and re-run.", file=sys.stderr)
         return 2
 
-    mandate = build_mandate()
-    session = Session(mandate, session_id="browser-scopes-demo")
+    mandate = config.build_mandate()
+    session = Session(mandate, session_id=config.session_id)
     tools = build_tools(mandate, session)
     session.write()                          # initial file: ceiling + lanes render before step 1
 
-    llm = ChatOpenAI(model=MODEL, api_key=openai_key)
-    fallback = ChatOpenAI(model=FALLBACK_MODEL, api_key=openai_key)
+    llm = ChatOpenAI(model=config.model, api_key=openai_key)
+    fallback = ChatOpenAI(model=config.fallback_model, api_key=openai_key)
 
     sidebar_url = _start_sidebar()
-    print(f"[signet] two-tier WebMandate  ceiling={sorted(mandate.ceiling.allowed_domains)}  "
+    print(f"[signet] {config.title}  ceiling={sorted(mandate.ceiling.allowed_domains)}  "
           f"scopes={list(mandate.menu)}  active={mandate.active!r}  (tier 0 / advisory)")
     print(f"[signet] guarded tools: {sorted(tools.registry.registry.actions)}")
     if sidebar_url:
@@ -242,13 +267,30 @@ async def _run() -> int:
               f"active is now {mandate.active!r}")
 
     live = None
+    steer_server = None
     if live_steer:
+        # SIGNET_STEER_IPC=1: the operator drives from a SEPARATE terminal (steer_console) over a
+        # local Unix socket, so the prompt never interleaves with the agent's step logs. The
+        # channel is UNCHANGED — only the request source moves from this terminal's stdin to the
+        # socket (same sync contract). Unset -> the in-terminal source, exactly as before.
+        source = None
+        if steer_ipc.ipc_enabled():
+            steer_server = steer_ipc.SteerServer().start()
+            source = steer_server.request_source
         live = LiveSteerChannel(mandate, session, asyncio.get_running_loop(),
-                                on_apply=on_steer, pre_apply=pre_steer)
+                                on_apply=on_steer, pre_apply=pre_steer, request_source=source)
         live.start()
-        print("[steer] LIVE steering ON — talk/type a scope request at ANY step to change the "
-              "active lane. Unmappable/out-of-ceiling requests are REFUSED + receipted. "
-              "(SIGNET_LIVE_STEER=0 for the Spec 04 on-block prompt.)")
+        if steer_server is not None:
+            print(f"[steer] LIVE steering ON (two-terminal IPC) — run the operator console in a "
+                  f"SEPARATE terminal:\n"
+                  f"        SIGNET_STEER_IPC=1 python -m examples.browser_demo.steer_console\n"
+                  f"        (socket: {steer_server.path}; add SIGNET_VOICE=1 to push-to-talk). "
+                  f"Requests are clamped to the ceiling; unmappable ones are REFUSED + receipted.")
+        else:
+            print("[steer] LIVE steering ON — talk/type a scope request at ANY step to change the "
+                  "active lane. Unmappable/out-of-ceiling requests are REFUSED + receipted. "
+                  "(SIGNET_STEER_IPC=1 to drive from a separate terminal; "
+                  "SIGNET_LIVE_STEER=0 for the Spec 04 on-block prompt.)")
         if task_steer.enabled():
             print("[task-steer] ON — prefix a request with 'task:'/'goal:'/'do:' to REDIRECT the "
                   "agent's goal mid-run. Intent changes; authority does NOT — every resulting "
@@ -256,13 +298,15 @@ async def _run() -> int:
 
     try:
         await agent_run(Agent(
-            task=TASK, llm=llm, fallback_llm=fallback, tools=tools,
-            browser_profile=BrowserProfile(headless=False, allowed_domains=BROWSER_ALLOWED_DOMAINS),
+            task=config.task, llm=llm, fallback_llm=fallback, tools=tools,
+            browser_profile=BrowserProfile(headless=False, allowed_domains=config.allowed_domains),
             directly_open_url=False,   # Agent kwarg; first hop must go through the guarded navigate
         ), driver, push_panel)
     finally:
         if live is not None:
             live.stop()                  # daemon thread; process exits cleanly regardless
+        if steer_server is not None:
+            steer_server.stop()          # unblocks request_source -> the channel thread exits, socket removed
 
     print("\n[signet] decisions (each backed by a signed receipt):")
     for e in session.to_dict()["effects"]:
