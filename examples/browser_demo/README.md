@@ -181,6 +181,59 @@ SIGNET_VOICE=1 python -m examples.browser_demo.run_interactive        # + push-t
 SIGNET_AUTO_GRANT=1 python -m examples.browser_demo.run_interactive   # legacy hands-free arc
 ```
 
+## Spec 05 — Live steering (always-on) + refuse-the-operator
+
+**Part 1 — always-on policy steering (default ON).** The operator changes the *active scope* at
+**any** step (not only on a block), routed through `select_scope` and clamped to the frozen
+ceiling — a spoken/typed request can only ever select a pre-authorized lane.
+
+- *Input owner:* a single **run-owned daemon thread** blocks on the operator (voice if
+  `SIGNET_VOICE=1`, else typed) and marshals each request onto the event loop via
+  `run_coroutine_threadsafe`, so `select_scope` and the `mandate.active` swap run **single-writer
+  on the loop the gate reads from** — a stronger guarantee than a lock (no half-applied-swap
+  window; a lock is kept too). The gate reads `active` fresh, so a swap lands on the next action
+  with no restart. Steering is owned by the **run**, never the page (the in-page overlay is
+  `pointer-events:none` — a clickable control there would re-pollute the agent's element index).
+- *One stdin owner, always:* `LIVE_STEER` mode → the channel owns stdin and the on-block path
+  degrades to a printed notice; `AUTO_GRANT` → no reader; `SIGNET_LIVE_STEER=0` → the Spec 04
+  on-block prompt is the sole reader. Never two readers.
+- *Refuse-the-operator beat:* an unmappable / out-of-ceiling request is **REFUSED**, `active`
+  unchanged, with a **signed receipt**, and rendered as a loud amber **“OPERATOR REQUEST REFUSED
+  — outside ceiling: …”** row in **both** the in-page overlay and the separate-page sidebar.
+- *Proofs:* `selfcheck_steer.py` (real channel thread: mid-run flip, refusal+receipt, voice/typed
+  routing) and `selfcheck_refusal_ui.py` (real Chromium: the refused row shows in both panels).
+
+**Part 2 — task steering (`SIGNET_TASK_STEER=1`, OFF by default).** The operator redirects the
+agent's *goal* mid-run by prefixing a request with `task:` / `goal:` / `do:` — e.g.
+`task: go to the admin panel and delete the account`. This is **untrusted instruction**: the
+agent may attempt it, but **every resulting action is still gated** against `mandate.active`, so
+an out-of-ceiling action is **BLOCKED on screen with a receipt**. Task steering changes *intent*,
+never *authority*. Mechanism: browser-use 0.13.1's `Agent.add_new_task(goal)`, applied only at a
+step boundary (`on_step_start`), fully guarded (a failure prints and is skipped — never crashes
+the run). The goal is queued by the channel's `pre_apply` interceptor so it is never mistaken for
+a policy steer. *Proof:* `selfcheck_task_steer.py` proves the **gating invariant** offline (any
+injected goal stays clamped; out-of-ceiling BLOCKED + receipt, in-ceiling ALLOWED + receipt) and
+the routing/injection units. The live agent arc (a real injected goal changing what the agent
+*attempts*) is **eyeballed on the user's machine** — it needs a network page-load this sandbox's
+DNS can't serve. Ships opt-in; if it fights the library on your machine, leave the flag off —
+Part 1 still delivers live steering.
+
+```bash
+python -m examples.browser_demo.run_interactive                    # always-on steering (default) + sidebar
+SIGNET_VOICE=1            python -m examples.browser_demo.run_interactive   # talk to steer
+SIGNET_INPAGE_PANEL=1     python -m examples.browser_demo.run_interactive   # + in-page overlay
+SIGNET_TASK_STEER=1       python -m examples.browser_demo.run_interactive   # + redirect the goal (gated)
+SIGNET_LIVE_STEER=0       python -m examples.browser_demo.run_interactive   # revert to Spec 04 on-block prompt
+```
+
+### Environment notes (the user's machine)
+- **Voice:** `pip install elevenlabs sounddevice` + `ELEVENLABS_API_KEY` in the repo `.env`, and a
+  one-time macOS **microphone** permission grant to the terminal. Test mic capture alone first
+  (record 2s → transcribe) before a full run.
+- The steering channel is a **focused control terminal** (press ENTER to talk / type a line) — it
+  deliberately avoids a global OS hotkey, which on macOS can need **Accessibility** permission and
+  fail silently on an unfamiliar machine on stage.
+
 ## Files
 
 | file | role |
@@ -192,12 +245,16 @@ SIGNET_AUTO_GRANT=1 python -m examples.browser_demo.run_interactive   # legacy h
 | `session.py` | wraps the real `signet.ReceiptLog`; one receipt per decision + `scope_switch`; writes `session.json` |
 | `run.py` | Spec 01 entrypoint (single-scope spine) |
 | `run_interactive.py` | Spec 02/03/04 entrypoint (two-tier + operator-driven switch + flag-gated panel/voice) |
-| `operator.py` | Spec 04 Part 1 — operator stdin intake + unified voice-or-typed `acquire_operator_request` |
-| `inpage_panel.py` | Spec 04 Part 2 — inert in-page overlay over CDP (survives navigation) |
-| `voice.py` | Spec 04 Part 3 — push-to-talk capture + ElevenLabs `scribe_v2`, typed fallback |
+| `operator.py` | Spec 04 Part 1 — operator stdin intake (async + sync twins), unified voice-or-typed |
+| `inpage_panel.py` | Spec 04 Part 2 — inert in-page overlay over CDP (survives navigation); Spec 05 REFUSED row |
+| `voice.py` | Spec 04 Part 3 — push-to-talk capture (sync core + async wrapper), ElevenLabs `scribe_v2` |
+| `steering.py` | Spec 05 Part 1 — always-on live steering channel (daemon thread → loop marshaling) |
+| `task_steer.py` | Spec 05 Part 2 — task-redirect routing + guarded `Agent.add_new_task` injection |
 | `selfcheck.py` / `selfcheck_scopes.py` | offline gate/receipt verification (acceptance, no LLM/browser) |
 | `selfcheck_operator.py` / `selfcheck_voice.py` | offline proof of Spec 04 Parts 1 & 3 (no LLM/browser) |
-| `selfcheck_inpage.py` | Spec 04 Part 2 acceptance gate — index-stability measurement (real Chromium, localhost) |
+| `selfcheck_steer.py` / `selfcheck_task_steer.py` | offline proof of Spec 05 Parts 1 & 2 (real channel thread / gating invariant) |
+| `selfcheck_inpage.py` | Spec 04 Part 2 gate — index-stability measurement (real Chromium, localhost) |
+| `selfcheck_refusal_ui.py` | Spec 05 Part 1 — refused row shows in BOTH panels (real Chromium) |
 
 ## Built in later specs / still deferred
 

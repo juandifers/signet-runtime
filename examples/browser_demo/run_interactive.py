@@ -52,7 +52,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 HERE = Path(__file__).resolve().parent          # examples/browser_demo (served as the static root)
 
-from . import inpage_panel
+from . import inpage_panel, task_steer
 from .guarded_tools import build_tools
 from .operator import acquire_operator_request
 from .scopes import select_scope
@@ -149,6 +149,7 @@ async def _run() -> int:
     notified = {"done": False}
     panel = {"obj": None}                            # Spec 04 Part 2 in-page panel (flag-gated)
     agent_ref = {"a": None}                           # captured for off-step panel refreshes
+    pending_goal = {"text": None}                     # Spec 05 Part 2 task steer, applied at step boundary
 
     async def push_panel(a: "Agent") -> None:
         """Best-effort: attach the in-page panel once, then push current state. Never raises —
@@ -173,6 +174,18 @@ async def _run() -> int:
         if agent_ref["a"] is not None:
             await push_panel(agent_ref["a"])
 
+    async def pre_steer(request: str) -> bool:
+        """Spec 05 Part 2: intercept an explicit task-steer ('task:'/'goal:'/'do:'/'now ...').
+        Queue the goal; it is injected at the NEXT step boundary (never mid-step). Returns True
+        when consumed so the request is NOT treated as a policy steer. Authority is unchanged —
+        every action the new goal triggers is still gated against mandate.active."""
+        goal = task_steer.parse_task_request(request)
+        if goal is None:
+            return False
+        pending_goal["text"] = goal
+        print(f"\n[task-steer] queued new goal: {goal!r} (every resulting action still gated)")
+        return True
+
     async def driver(a: "Agent") -> None:
         """on_step_start: state snapshot + (non-live modes) the one-time on-block scope switch.
         No enforcement here — the gate inside the guarded tools is authoritative."""
@@ -186,6 +199,12 @@ async def _run() -> int:
             pass
 
         await push_panel(a)                          # install (once) + refresh the in-page panel
+
+        # Spec 05 Part 2: apply a queued task steer HERE (between steps), via the library hook.
+        if pending_goal["text"] is not None:
+            goal = pending_goal["text"]; pending_goal["text"] = None
+            if task_steer.inject_task(a, goal):
+                print(f"[task-steer] goal injected: {goal!r}  (actions remain gated by active scope)")
 
         blocked = next((e for e in session.to_dict()["effects"]
                         if e["proposed"]["action"] == "click" and e["decision"] == "BLOCK"), None)
@@ -224,11 +243,16 @@ async def _run() -> int:
 
     live = None
     if live_steer:
-        live = LiveSteerChannel(mandate, session, asyncio.get_running_loop(), on_apply=on_steer)
+        live = LiveSteerChannel(mandate, session, asyncio.get_running_loop(),
+                                on_apply=on_steer, pre_apply=pre_steer)
         live.start()
         print("[steer] LIVE steering ON — talk/type a scope request at ANY step to change the "
               "active lane. Unmappable/out-of-ceiling requests are REFUSED + receipted. "
               "(SIGNET_LIVE_STEER=0 for the Spec 04 on-block prompt.)")
+        if task_steer.enabled():
+            print("[task-steer] ON — prefix a request with 'task:'/'goal:'/'do:' to REDIRECT the "
+                  "agent's goal mid-run. Intent changes; authority does NOT — every resulting "
+                  "action is still gated against the active scope.")
 
     try:
         await agent_run(Agent(

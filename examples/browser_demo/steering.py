@@ -45,13 +45,17 @@ class LiveSteerChannel:
     def __init__(self, mandate, session, loop: asyncio.AbstractEventLoop, *,
                  prompt: str = "[steer] scope request (talk/type, ENTER alone = skip): ",
                  request_source: Optional[Callable[[], Optional[str]]] = None,
-                 on_apply: Optional[Callable[[object, str], Awaitable[None]]] = None) -> None:
+                 on_apply: Optional[Callable[[object, str], Awaitable[None]]] = None,
+                 pre_apply: Optional[Callable[[str], Awaitable[bool]]] = None) -> None:
         self.mandate = mandate
         self.session = session
         self.loop = loop
         self.prompt = prompt
         self._request_source = request_source or (lambda: acquire_operator_request_sync(self.prompt))
         self._on_apply = on_apply
+        # Optional async interceptor: if it returns True the request was consumed (e.g. a task
+        # steer, Spec 05 Part 2) and select_scope is skipped. Default None -> always policy-steer.
+        self._pre_apply = pre_apply
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -85,6 +89,12 @@ class LiveSteerChannel:
 
     # -- runs on the event loop -----------------------------------------------------------
     async def _apply(self, request: str):
+        if self._pre_apply is not None:
+            try:
+                if await self._pre_apply(request):
+                    return None                  # consumed upstream (task steer); not a policy steer
+            except Exception:
+                pass
         with self._lock:
             decision = select_scope(self.mandate, request, session=self.session)
         if self._on_apply is not None:
