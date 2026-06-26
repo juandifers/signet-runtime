@@ -1,0 +1,252 @@
+{
+  "session_id": "browser-scopes-demo",
+  "generated_at": "2026-06-25T19:44:24+00:00",
+  "tier": "0 (advisory)",
+  "tier_structural": false,
+  "mandate": {
+    "principal": "demo-agent",
+    "task_id": "browse-scopes-001",
+    "database": null,
+    "granted_scope": [
+      {
+        "rail": "browser",
+        "action": "navigate|click|extract",
+        "target": "wikipedia.org"
+      },
+      {
+        "rail": "browser",
+        "action": "navigate|click|extract",
+        "target": "ycombinator.com"
+      }
+    ],
+    "ceiling": {
+      "name": "__ceiling__",
+      "domains": [
+        "wikipedia.org",
+        "ycombinator.com"
+      ],
+      "actions": [
+        "click",
+        "extract",
+        "navigate"
+      ],
+      "click_policy": "allow_unresolved"
+    },
+    "scopes": [
+      {
+        "name": "tour",
+        "domains": [
+          "wikipedia.org"
+        ],
+        "actions": [
+          "click",
+          "extract",
+          "navigate"
+        ],
+        "click_policy": "in_domain_only"
+      },
+      {
+        "name": "learn_more",
+        "domains": [
+          "wikipedia.org",
+          "ycombinator.com"
+        ],
+        "actions": [
+          "click",
+          "extract",
+          "navigate"
+        ],
+        "click_policy": "in_domain_only"
+      }
+    ],
+    "active": "learn_more"
+  },
+  "effects": [
+    {
+      "seq": 1,
+      "step": 1,
+      "rail": "browser",
+      "label": "navigate en.wikipedia.org",
+      "proposed": {
+        "action": "navigate",
+        "target": "en.wikipedia.org",
+        "detail": "url=https://en.wikipedia.org/wiki/Y_Combinator"
+      },
+      "decision": "ALLOW",
+      "reason": "navigate on en.wikipedia.org within scope 'tour'",
+      "escalation_source": "resolved",
+      "token_minted": false,
+      "performed": {
+        "browser": "navigated to en.wikipedia.org"
+      },
+      "active_scope": "tour",
+      "receipt_id": "1d266647e7dcb34eb9ebbf6d0f144d8406f9a6d74b551524297c0a62b905a1af",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 2,
+      "step": 2,
+      "rail": "browser",
+      "label": "extract en.wikipedia.org",
+      "proposed": {
+        "action": "extract",
+        "target": "en.wikipedia.org",
+        "detail": "query=Extract the article title and the first sentence of the Wikipedia article. Re..."
+      },
+      "decision": "ALLOW",
+      "reason": "extract on en.wikipedia.org within scope 'tour'",
+      "escalation_source": "resolved",
+      "token_minted": false,
+      "performed": {
+        "browser": "read 4000 chars"
+      },
+      "active_scope": "tour",
+      "receipt_id": "3e00f3318bc0ca2fc281cfd60995d2f4b09c52d8fb09e2aae2d956ed7c8e336f",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 3,
+      "step": 3,
+      "rail": "browser",
+      "label": "click www.ycombinator.com",
+      "proposed": {
+        "action": "click",
+        "target": "www.ycombinator.com",
+        "detail": "index=26"
+      },
+      "decision": "BLOCK",
+      "reason": "click navigates off-scope to www.ycombinator.com (page-provenance link; not in scope 'tour' domains ['wikipedia.org'])",
+      "escalation_source": "admission_denied",
+      "token_minted": false,
+      "performed": {
+        "browser": "blocked (off-scope link)"
+      },
+      "active_scope": "tour",
+      "receipt_id": "cbc37e62dd44d4e1436a8209f8daf7d5d875590935c3a3bfaa7ae12ff2d7eb84",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 4,
+      "step": null,
+      "rail": "scope",
+      "label": "select_scope: show me Y Combinator's official website",
+      "proposed": {
+        "action": "select_scope",
+        "target": "learn_more",
+        "detail": "query=show me Y Combinator's official website"
+      },
+      "decision": "ALLOW",
+      "reason": "request mapped to menu scope 'learn_more'; activated (frozen, \u2286 ceiling)",
+      "escalation_source": "resolved",
+      "token_minted": false,
+      "performed": {
+        "scope": "learn_more"
+      },
+      "active_scope": "learn_more",
+      "receipt_id": "aa0d09fad06864c7abddb13ab220d3d960178805af8f70b4bb47799e7488f728",
+      "receipt_verified": true,
+      "note": "untrusted planner mapped request -> a frozen menu key; activation is deterministic"
+    },
+    {
+      "seq": 5,
+      "step": 4,
+      "rail": "browser",
+      "label": "click www.ycombinator.com",
+      "proposed": {
+        "action": "click",
+        "target": "www.ycombinator.com",
+        "detail": "index=26"
+      },
+      "decision": "ALLOW",
+      "reason": "click -> www.ycombinator.com within scope 'learn_more'",
+      "escalation_source": "resolved",
+      "token_minted": false,
+      "performed": {
+        "browser": "clicked index 26 -> www.ycombinator.com"
+      },
+      "active_scope": "learn_more",
+      "receipt_id": "5f2369e7a5e7d153b08fdbd3a0ed7230606f68904137e3d0a49ed8a4e804108b",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 6,
+      "step": 5,
+      "rail": "browser",
+      "label": "navigate www.google.com",
+      "proposed": {
+        "action": "navigate",
+        "target": "www.google.com",
+        "detail": "url=https://www.google.com"
+      },
+      "decision": "BLOCK",
+      "reason": "navigate to www.google.com not in scope 'learn_more' domains ['wikipedia.org', 'ycombinator.com']",
+      "escalation_source": "admission_denied",
+      "token_minted": false,
+      "performed": {
+        "browser": "blocked"
+      },
+      "active_scope": "learn_more",
+      "receipt_id": "34bda3181b9165621962151b2cdd913363cf3dfc8c49bbfcd560d2db845f97be",
+      "receipt_verified": true,
+      "note": null
+    },
+    {
+      "seq": 7,
+      "step": 6,
+      "rail": "browser",
+      "label": "navigate www.google.com",
+      "proposed": {
+        "action": "navigate",
+        "target": "www.google.com",
+        "detail": "url=https://www.google.com"
+      },
+      "decision": "BLOCK",
+      "reason": "navigate to www.google.com not in scope 'learn_more' domains ['wikipedia.org', 'ycombinator.com']",
+      "escalation_source": "admission_denied",
+      "token_minted": false,
+      "performed": {
+        "browser": "blocked"
+      },
+      "active_scope": "learn_more",
+      "receipt_id": "8ebdef27a2b4033293bf91cfb12bbf52fa6f9c79b7bca6b80aa106ec92b80322",
+      "receipt_verified": true,
+      "note": null
+    }
+  ],
+  "snapshots": [
+    {
+      "step": 1,
+      "url": "about:blank",
+      "title": "about:blank"
+    },
+    {
+      "step": 2,
+      "url": "https://en.wikipedia.org/wiki/Y_Combinator",
+      "title": "en.wikipedia.org/wiki/Y_Combinator"
+    },
+    {
+      "step": 3,
+      "url": "https://en.wikipedia.org/wiki/Y_Combinator",
+      "title": "en.wikipedia.org/wiki/Y_Combinator"
+    },
+    {
+      "step": 4,
+      "url": "https://en.wikipedia.org/wiki/Y_Combinator",
+      "title": "en.wikipedia.org/wiki/Y_Combinator"
+    },
+    {
+      "step": 5,
+      "url": "https://www.ycombinator.com/",
+      "title": "ycombinator.com"
+    },
+    {
+      "step": 6,
+      "url": "https://www.ycombinator.com/",
+      "title": "ycombinator.com"
+    }
+  ]
+}
