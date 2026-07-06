@@ -268,7 +268,7 @@ ceiling each gain `path_allow: list[str]` — fnmatch globs over the URL path (`
   never reach a path the ceiling forbids — no fragile glob-subset proof at build (domains/actions
   keep their build validation). The reason distinguishes **ceiling-deny** (`path … not allowed in
   ceiling` — *no scope, no operator, can grant it*) from **scope-deny** (`path … not in scope
-  'shopping'` — *switching lanes could grant it*). Both render in the sidebar and in-page panel
+  'shop'` — *switching lanes could grant it*). Both render in the sidebar and in-page panel
   (a `paths` row on each lane + the frozen ceiling).
 - **Where it bites:** the navigate **destination** and a **resolved** click destination (the Spec
   02 href path) — *plus* the **current page** on every action. The current-page check is the
@@ -276,15 +276,70 @@ ceiling each gain `path_allow: list[str]` — fnmatch globs over the URL path (`
   `<button>`s with no static href): you may *land* on an off-scope path via `allow_unresolved`, but
   you cannot **act** there — type/extract/click are blocked until you're back on an allowed path.
 
-The `run_saucedemo` mandate: ceiling allows `/`, `/inventory*`, `/cart.html`, `/checkout-step-one`,
-`/checkout-step-two` — **omitting `/checkout-complete.html`**, so *placing* the order is outside the
-ceiling and no scope (or operator) can grant it. Scope `shopping` (default) = browse + cart; scope
-`checkout` adds the two checkout pages. The operator switches `shopping → checkout` live (Spec 05).
+The `run_saucedemo` mandate has a **three-lane menu** under one ceiling. The ceiling allows `/`,
+`/inventory*`, `/cart.html`, `/checkout-step-one`, `/checkout-step-two` — **omitting
+`/checkout-complete.html`**, so *placing* the order is outside the ceiling and no scope (or
+operator) can grant it.
+
+| scope | actions · paths | what it unlocks |
+|-------|-----------------|-----------------|
+| `look` | navigate/extract · `/`, `/inventory*`, `/cart.html` | **read-only** — browse + read the cart; can't click/type (no login) |
+| `shop` *(default)* | + click/type | log in, add to cart, view the cart |
+| `checkout` | + `/checkout-step-one`, `/checkout-step-two` | the checkout form + overview |
+
+`look` is gated by **actions** (read-only), `shop`→`checkout` by **paths**. `shop`/`checkout` use
+`click_policy=allow_unresolved` because saucedemo's login / add-to-cart / checkout are JS buttons
+with no static href — `in_domain_only` would block them (login included); the path dual-check +
+current-page backstop is the real containment.
+
+The operator steers between lanes **live** (Spec 05). **Cheat sheet** — what to say (the menu names
+*are* the trigger words; the live planner is an LLM, the keyword fallback is the deterministic net,
+and `selfcheck_saucedemo` dry-runs every row):
+
+| say | → | result |
+|-----|---|--------|
+| "just looking" / "look around" | `look` | read-only — can't click/type |
+| "let's shop" / "back to shopping" | `shop` | interaction restored |
+| "go to checkout" / "proceed to checkout" | `checkout` | checkout form unlocked |
+| "place the order" / "pay" / "buy it" / "finish" | **REFUSED** | matched no scope — outside the menu/ceiling |
+
+**Unmapped requests are announced LOUDLY, never a quiet line that reads like it worked.** When the
+planner returns `none` (e.g. "place the order"), the run prints a `⛔ "<request>" matched no scope —
+REFUSED (outside the menu/ceiling)` banner *and* writes a signed refusal receipt + a REFUSED row in
+both panels — so a fumbled phrase on stage is unmistakable. The planner prompt lists exactly the
+menu names and is instructed to return `none` for any order / pay / purchase / finish phrasing
+(selecting a scope can never authorize *completing* a purchase).
+
+### Item steering — tell it which items (intent, not authority)
+
+While in `shop` you can direct the cart by voice. **This is not a policy change:** `shop` already
+authorizes add/remove (each is a `click` on `/inventory*` or `/cart.html`). Choosing *which* items
+is **intent**, so it routes through **task steering** (Spec 05 Part 2), not scope steering — natural
+cart verbs (`add` / `remove` / `put` / `take` / `drop` / `delete`) become the agent's goal and every
+resulting click is still gated by `shop`. `run_saucedemo` **defaults `SIGNET_TASK_STEER=1`** (item
+shopping is the point); set `SIGNET_TASK_STEER=0` to keep only lane steering.
+
+| say | does |
+|-----|------|
+| "add the bike light" / "put the fleece jacket in the cart" | agent clicks that item's **Add to cart** (gated) |
+| "remove the backpack" / "take the onesie out of the cart" | agent clicks that item's **Remove** (gated) |
+| "go to checkout" | **scope** steer — *and* the agent opens the cart + walks the form (see nudge below) |
+| "place the order" / "pay" / "finish" | still **REFUSED** — no cart verb, so it can't be injected as a task |
+
+**A scope switch also drives the agent into the lane it unlocks.** A switch only changes
+*authority* and is invisible to the agent — so "go to checkout" both flips to the `checkout` lane
+*and* injects a one-shot goal: **open the cart, report it, then walk the checkout form** (it stops
+before Finish). "let's shop" returns it to the inventory. (Wired via `RunConfig.scope_goals`;
+unset for the Wikipedia demo, which is unchanged.) Without this the agent would sit re-reading the
+page after a switch, since it can't perceive the new authority on its own.
 
 ```bash
-python -m examples.browser_demo.run_saucedemo          # path-scoped arc (operator steers shopping→checkout live)
-python -m examples.browser_demo.selfcheck_saucedemo    # offline proof + sample session.json (no browser/LLM)
+SIGNET_VOICE=1 python -m examples.browser_demo.run_saucedemo   # voice + item steering (default on)
+python -m examples.browser_demo.run_saucedemo                  # typed; operator steers look↔shop↔checkout
+python -m examples.browser_demo.selfcheck_saucedemo            # offline proof + cheat-sheet dry run
 ```
+The agent logs in, seeds the cart with the backpack, then **follows your item instructions**; it
+won't proceed to checkout until you say "go to checkout".
 
 > **Credentials:** saucedemo's `standard_user` / `secret_sauce` are **public, documented** test
 > credentials for a throwaway site. In production a **human establishes the authenticated session**

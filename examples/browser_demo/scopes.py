@@ -90,10 +90,15 @@ def _llm_classify(request: str, mandate: FrozenWebMandate,
         f"- {s.name}: domains={sorted(s.allowed_domains)} actions={sorted(s.allowed_actions)}"
         for s in mandate.menu.values())
     system = (
-        "You map a user request to EXACTLY ONE scope name from a fixed menu, or 'none'. "
-        "Return ONLY the scope name (or the literal word none) — no punctuation, no explanation. "
-        "You may NOT invent names or widen scope.\n"
-        f"Menu:\n{menu_desc}\n"
+        "You map a user's request to EXACTLY ONE scope name from a fixed menu, or the literal "
+        "word 'none'. Return ONLY the scope name or 'none' — no punctuation, no explanation. You "
+        "may NOT invent names, widen a scope, or pick the 'closest' scope when the request does "
+        "not clearly select one of the menu names below. WHEN IN DOUBT, ANSWER 'none'.\n"
+        "CRITICAL: a request to COMPLETE an action that is not itself a scope — place / submit / "
+        "confirm / finish an order, pay, purchase, buy, check out the FINAL step — MUST return "
+        "'none'. Choosing a scope only changes which pre-authorized lane is active; it can never "
+        "authorize completing a purchase, so such phrasing is always 'none'.\n"
+        f"Menu (the ONLY valid scope names):\n{menu_desc}\n"
         f"Valid answers: {names + ['none']}")
     try:
         from openai import OpenAI

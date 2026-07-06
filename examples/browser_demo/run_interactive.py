@@ -94,6 +94,11 @@ class RunConfig:
     model: str = MODEL
     fallback_model: str = FALLBACK_MODEL
     title: str = "two-tier WebMandate"
+    # Optional: when an operator steers INTO one of these scopes, also nudge the agent to USE the
+    # lane it just unlocked (a scope switch changes AUTHORITY but is silent to the agent — without
+    # this it sits waiting). Maps scope name -> a one-shot goal injected at the next step. None =
+    # no nudge (the Wikipedia demo is unchanged).
+    scope_goals: "dict[str, str] | None" = None
 
 
 def _wikipedia_config() -> "RunConfig":
@@ -192,10 +197,25 @@ async def _run(config: "RunConfig | None" = None) -> int:
 
     async def on_steer(decision, request: str) -> None:
         """Runs on the loop after each always-on steer: log + refresh the in-page panel NOW so
-        a steer / refusal is visible immediately (the sidebar already updates from session.json)."""
-        verdict = decision.outcome.upper()
-        tag = "REFUSED (outside ceiling)" if not decision.allowed else f"active -> {mandate.active!r}"
-        print(f"\n[steer] {request!r} -> {verdict}  {tag}")
+        a steer / refusal is visible immediately (the sidebar already updates from session.json).
+
+        An unmapped request is announced LOUDLY — never a quiet line that reads like it did
+        something. The refusal already carries a signed receipt + a REFUSED row in both panels;
+        this banner is the human-readable half so a fumbled phrase on stage is unmistakable."""
+        if decision.allowed:
+            print(f"\n[steer] {request!r} -> SWITCH  active -> {mandate.active!r}")
+            # A scope switch unlocks authority but is invisible to the agent. If this lane has a
+            # nudge, queue it so the agent actually USES the lane (e.g. checkout -> open the cart
+            # and walk the form) instead of sitting and re-extracting.
+            goal = (config.scope_goals or {}).get(mandate.active)
+            if goal:
+                pending_goal["text"] = goal
+                print(f"[steer] directing the agent into the {mandate.active!r} lane "
+                      f"(it will act on the next step).")
+        else:
+            bar = "=" * 64
+            print(f"\n{bar}\n⛔  \"{request}\" matched no scope — REFUSED (outside the menu/ceiling)."
+                  f"\n    active scope unchanged: {mandate.active!r}\n{bar}")
         if agent_ref["a"] is not None:
             await push_panel(agent_ref["a"])
 
@@ -263,8 +283,11 @@ async def _run(config: "RunConfig | None" = None) -> int:
                                         reason="operator pressed ENTER; active scope unchanged", step=step)
             return
         d = select_scope(mandate, request, session=session)
-        print(f"[signet] operator request {request!r} -> select_scope {d.outcome.upper()}  "
-              f"active is now {mandate.active!r}")
+        if d.allowed:
+            print(f"[signet] operator request {request!r} -> SWITCH; active is now {mandate.active!r}")
+        else:
+            print(f"\n⛔  \"{request}\" matched no scope — REFUSED (outside the menu/ceiling); "
+                  f"active unchanged: {mandate.active!r}")
 
     live = None
     steer_server = None
