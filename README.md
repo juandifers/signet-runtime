@@ -82,6 +82,51 @@ Research-grade, and labeled as one. The enforcement is real and tested; a few pr
 
 The full suite is green, CI makes no live LLM calls, and every rail runs on the same unmodified core.
 
+## Navigating the repo
+
+Start at the kernel (`signet/verifier.py`), then move outward: authorizers adapt the kernel's *decision* to a rail, the seam adapts a *rail* to an *orchestrator*, and everything in `examples/` is a runnable story on top.
+
+**The core — `signet/`** (rail-agnostic; held to zero edits per rail)
+| Path | What it is |
+|---|---|
+| `verifier.py` | The 11-step decision kernel. **Start here.** |
+| `chain.py` · `models.py` | AP2 chain hashing/linkage/context-binding; Intent/Cart/Payment + token/receipt types |
+| `policy.py` · `nonce.py` · `revocation.py` | Caps/allowlist/currency/velocity · SQLite consume-once · execution-time revocation |
+| `receipts.py` · `crypto.py` · `canonical.py` | Hash-chained signed receipts · Ed25519 sign/verify · canonical JSON (swap seams) |
+| `builder.py` | Mints signed chains + attack-variant hooks (tests/demos build here) |
+| `authorizers/` | The Role-2 template (`base.py`, fill 2 hooks) + `mock_broker.py`, `xrpl_cosigner.py` (Role 1), `mpc_cosigner.py` (Role 1b) |
+| `broker/` · `rails/` · `sandbox/` | Broker = authorizer over a transport (separate OS user) · keyholder rails (supabase DB, egress proxy) · netns egress boundary (Linux, privilege-gated) |
+| `fence.py` · `cli/` | Local path/command fence + `.signet/policy.yaml` · the `signet` console script (`hook`, `init`, `status`, `receipts`) — never imports `evals/*` |
+| `api.py` | HTTP surface (`uvicorn signet.api:app`); wires only the mock broker |
+
+**The layers above the kernel**
+| Path | What it is |
+|---|---|
+| `integrations/effect_gateway/` | The orchestrator-agnostic **seam** (`ProposedEffect → Decision`); read `SEAM_CONTRACT.register.md` before touching it |
+| `integrations/langgraph/` | LangGraph middleware — the `guard(tool, mandate)` on-ramp |
+| `rail_algebra/` | (in `signet/`) rail-shape composition |
+
+**Runnable demos & examples**
+| Path | What it is |
+|---|---|
+| `examples/onramp/` | The minimal `guard()` + `Mandate` on-ramp (start here to integrate) |
+| `examples/refund_triage/` | The headline demo — one agent, two rails (DB + egress), one poisoned ticket |
+| `examples/browser_demo/` | Guarded browser agent: frozen path-aware WebMandate, saucedemo/acmeshop runs, self-checks, viewer |
+| `examples/combined.py` · `guard_db_block.py` · `guard_egress.py` | Copy-paste snippets from "Try it" |
+| `demos/` | CLI demos: `role2_demo`, `role1_xrpl_demo`, `mpc_demo`, `langgraph_merge_demo`, github railbridge |
+
+**Tests, evals, proofs** — *the tests are the spec*
+| Path | What it is |
+|---|---|
+| `tests/test_attacks.py` | The 21-attack **kernel spec** (each test = one attack) |
+| `tests/test_broker_*.py` · `test_netns_egress.py` | DB/egress bypass batteries (`#9`/`#8` = advisory) · netns boundary (privilege-gated) |
+| `tests/test_local_fence.py` · `test_signet_middleware.py` · `test_refund_*.py` | Local gate · orchestrator middleware · refund-triage acceptance |
+| `evals/scorecard/` | Offline security scorecard — `python -m evals.scorecard`, exits non-zero on any invariant failure |
+| `evals/agentdojo/` · `evals/github_railbridge/` | Egress eval harness · merge-rail eval corpus |
+| `verify/` · `anchor/` | Standalone receipt verifier (`verify.py`) + format doc · transparency-log anchor stub |
+
+**Docs, root to deep** — `README.md` (this file, the pitch) → [`ARCHITECTURE.md`](./ARCHITECTURE.md) (data flow + invariants) → [`DESIGN.md`](./DESIGN.md) (full design, P1–P9) → [`PRINCIPLES.md`](./PRINCIPLES.md) · [`LOCAL_GATE.md`](./LOCAL_GATE.md) (the local fence) · [`CLAUDE.md`](./CLAUDE.md) (invariants for contributors — read before changing the kernel).
+
 ## Where the ideas come from
 
 The trusted-planner / quarantined-worker split is the dual-LLM pattern, formalized as CaMeL (Debenedetti et al., 2025); Signet specializes it to irreversible actions and adds cryptographic binding plus a verifiable log. The mandate chain follows AP2 (the Agent Payments Protocol). The transparency log is RFC 6962 (Certificate Transparency). The "abstain unless exactly one candidate matches" rule comes from selective-prediction work, which keeps finding that models don't abstain when they should and that a structural rule beats a confidence threshold.
