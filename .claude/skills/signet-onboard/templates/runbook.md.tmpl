@@ -1,0 +1,69 @@
+# Runbook — {{APP_TITLE}} (guarded browser agent)
+
+> One agent, a frozen ceiling, a live-steerable menu of lanes. The operator changes **which lane**
+> is active (authority, clamped to the ceiling); the agent decides **what to attempt** (intent,
+> always gated). The irreversible step is **outside the ceiling** — no lane, no operator, no
+> injected goal can reach it.
+
+## Lanes (one ceiling, default-deny menu)
+
+The ceiling allows {{CEILING_PATHS_HUMAN}} — **omitting {{WALL_PATHS_HUMAN}}**, so {{WALL_ACTION_HUMAN}}
+is structurally impossible.
+
+| lane | actions · paths | what it unlocks |
+|------|-----------------|-----------------|
+{{LANE_TABLE_ROWS}}
+
+`{{DEFAULT_SCOPE}}` is the default (so the first steps — {{FIRST_STEPS_HUMAN}} — are possible).
+`{{READONLY_SCOPE}}` is gated by **actions** (read-only); the step up to `{{SENSITIVE_SCOPE}}` is
+gated by **paths**.
+
+## Voice / type cheat-sheet
+
+The menu names *are* the trigger words (an LLM planner maps free text to one menu key; a
+deterministic keyword matcher is the offline net). Say it in this terminal (or the operator console
+with `SIGNET_STEER_IPC=1`).
+
+| say | → | result |
+|-----|---|--------|
+{{CHEAT_ROWS}}
+| {{REFUSE_PHRASES}} | **REFUSED** | matched no lane — outside the menu/ceiling (loud banner + signed refusal receipt) |
+
+{{ITEM_STEER_SECTION}}
+
+## Run of show (beat by beat)
+
+```bash
+SIGNET_VOICE=1 python -m examples.browser_demo.run_{{APP}}   # voice steering{{TASK_STEER_RUN_NOTE}}
+python -m examples.browser_demo.run_{{APP}}                  # typed steering
+python -m examples.browser_demo.selfcheck_{{APP}}            # offline proof (no LLM/browser)
+```
+
+1. **Boot.** Sidebar opens showing the frozen ceiling + the lane menu (the wall is visible: no
+   {{WALL_PATHS_HUMAN}}). Agent starts in `{{DEFAULT_SCOPE}}` and {{FIRST_STEPS_HUMAN}}.
+2. **Work the default lane.** {{DEFAULT_BEAT}}
+3. **The wall (refuse the agent).** {{WALL_BEAT}} — blocked under every lane, ceiling-deny, with a
+   receipt. This is the "no operator can grant it" beat.
+4. **Grant a lane (steer up).** Say "{{STEER_UP_PHRASE}}" → switches to `{{SENSITIVE_SCOPE}}`; the
+   previously path-blocked step now passes (no restart — the gate re-reads the active lane).
+5. **Refuse the operator.** Say "{{REFUSE_PHRASE_ONE}}" → ⛔ REFUSED banner + receipt; active lane
+   unchanged. Selecting a lane can never authorize {{WALL_ACTION_HUMAN}}.
+6. **Receipts.** Every decision (allow / block / scope-switch / refusal) prints with a signed,
+   verified receipt id and is written to `session.json` (rendered live in the sidebar).
+
+> **Credentials:** the agent does **not** enter real credentials. In production a **human
+> establishes the authenticated session**; Signet gates the agent's *actions*, it is not a
+> credential manager. (For a throwaway demo site with public test credentials, note that they are
+> public and disposable.)
+
+## Honesty (what fought the library)
+
+- The browser gate is **tier-0 / advisory** — in-process, not the kernel/broker enforcement
+  boundary. It is the right shape (default-deny, frozen ceiling, signed receipts) but a determined
+  in-process bypass is out of scope for this layer.
+- Lanes that must click app buttons use `click_policy=allow_unresolved` because those buttons are
+  JS `<button>`s with no static href — the click *lands*, and the **current-page path check** is
+  the backstop (you may land off-path but you cannot **act** there). Pure read-only lanes use
+  `in_domain_only`.
+- The live page-loads need network DNS; `selfcheck_{{APP}}.py` proves the structural arc offline —
+  eyeball the live run on a networked machine.
